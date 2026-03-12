@@ -1,8 +1,3 @@
-"""
-Unified Quantitative Allocation Platform
-Architettura integrata: Motore Dati Condiviso + Multi-Model Routing
-"""
-
 import streamlit as st
 import yfinance as yf
 try:
@@ -24,62 +19,65 @@ from sklearn.covariance import LedoitWolf
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-# ==========================================
-# CONFIGURAZIONE PAGINA & CSS (Master Theme)
-# ==========================================
-st.set_page_config(page_title="Quant Platform Pro", page_icon="🏦", layout="wide", initial_sidebar_state="expanded")
+# --- CONFIGURAZIONE GLOBALE E SESSION STATE ---
+st.set_page_config(page_title="Portfolio Suite", layout="wide")
 
-# Palette Navy / Light Blue
-BG_PRIMARY      = "#F4F7FA"
-BG_SECONDARY    = "#FFFFFF"
-TEXT_PRIMARY    = "#0A192F" # Deep Navy
-TEXT_SECONDARY  = "#495670"
-COLOR_HIGHLIGHT = "#112240" # Navy Header
-COLOR_ACCENT    = "#0070F3" # Bright Blue Accent
-BORDER_COLOR    = "#E2E8F0"
+if 'shared_df' not in st.session_state:
+    st.session_state.shared_df = None
+if 'shared_assets' not in st.session_state:
+    st.session_state.shared_assets = []
+if 'shared_freq' not in st.session_state:
+    st.session_state.shared_freq = 252
 
-st.markdown(f"""
-<style>
-    .stApp {{ background-color: {BG_PRIMARY}; color: {TEXT_PRIMARY}; font-family: 'Inter', sans-serif; }}
-    [data-testid="stSidebar"] {{ background-color: {BG_SECONDARY}; border-right: 1px solid {BORDER_COLOR}; }}
-    h1, h2, h3 {{ color: {COLOR_HIGHLIGHT} !important; font-weight: 700; letter-spacing: -0.5px; }}
-    .stButton > button {{ background-color: {COLOR_ACCENT} !important; color: white !important; border-radius: 8px !important; font-weight: 600; border: none; transition: 0.3s; }}
-    .stButton > button:hover {{ background-color: {COLOR_HIGHLIGHT} !important; box-shadow: 0 4px 12px rgba(0,112,243,0.3); }}
-    .stTabs [data-baseweb="tab-list"] {{ gap: 8px; background-color: transparent; border-bottom: 2px solid {BORDER_COLOR}; }}
-    .stTabs [data-baseweb="tab"] {{ background-color: {BG_SECONDARY}; border-radius: 6px 6px 0 0; border: 1px solid {BORDER_COLOR}; border-bottom: none; color: {TEXT_SECONDARY}; }}
-    .stTabs [aria-selected="true"] {{ background-color: {COLOR_HIGHLIGHT} !important; color: white !important; }}
-    div[data-testid="stMetric"] {{ background: {BG_SECONDARY}; border: 1px solid {BORDER_COLOR}; border-radius: 8px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.02); }}
-</style>
-""", unsafe_allow_html=True)
+# ==============================================================================
+# BLOCCO 1: FUNZIONI ESATTE DI "ALLOCAZIONE AUTO"
+# ==============================================================================
+BG_PRIMARY = "#F8F9FA"
+BG_SECONDARY = "#FFFFFF"
+BG_CARD = "#FFFFFF"
+TEXT_PRIMARY = "#1A202C"
+TEXT_SECONDARY = "#4A5568"
+TEXT_MUTED = "#718096"
+COLOR_HIGHLIGHT = "#1A365D" 
+COLOR_ACCENT = "#2C5282"
+BORDER_COLOR = "#E2E8F0"
+CHART_COLORS = ["#1A365D", "#2C5282", "#3182CE", "#4299E1", "#63B3ED", "#90CDF4", "#BEE3F8", "#E6F2FF"]
+COLOR_GREEN = "#38A169"
+COLOR_RED = "#E53E3E"
+COLOR_GOLD = "#D69E2E"
+BORDER_RADIUS = "12px"
 
-# ==========================================
-# STATE MANAGEMENT
-# ==========================================
-if 'df_historical' not in st.session_state:
-    st.session_state.df_historical = None
-if 'data_freq' not in st.session_state:
-    st.session_state.data_freq = "Giornaliero"
-if 'ann_factor' not in st.session_state:
-    st.session_state.ann_factor = 252
-if 'current_view' not in st.session_state:
-    st.session_state.current_view = "auto"
+PLOTLY_LAYOUT = dict(template="plotly_white", paper_bgcolor=BG_SECONDARY, plot_bgcolor=BG_SECONDARY, colorway=CHART_COLORS)
 
-# ==========================================
-# DATA ENGINE (Condiviso)
-# ==========================================
-ALIAS_MAP = {
-    "SP500": "^GSPC", "NASDAQ": "^NDX", "DAX": "^GDAXI", "VIX": "^VIX", 
-    "GOLD": "GC=F", "OIL": "CL=F", "BTC": "BTC-USD"
-}
+def kpi_tile(label: str, value: str, sub: str = "", positive=None):
+    color_class = "positive" if positive is True else "negative" if positive is False else ""
+    sub_html = f'<div style="font-size: 0.72rem; color: {TEXT_MUTED}; margin-top: 0.4rem;">{sub}</div>' if sub else ""
+    st.markdown(f"""
+    <div style="background: {BG_CARD}; border: 2px solid {BORDER_COLOR}; border-radius: {BORDER_RADIUS}; padding: 1.4rem; text-align: center; margin-bottom: 1rem;">
+        <div style="font-size: 0.72rem; font-weight: 700; color: {TEXT_MUTED}; text-transform: uppercase;">{label}</div>
+        <div style="font-size: 1.8rem; font-weight: 700; color: {'green' if color_class=='positive' else 'red' if color_class=='negative' else TEXT_PRIMARY};">{value}</div>
+        {sub_html}
+    </div>
+    """, unsafe_allow_html=True)
 
-@st.cache_data(show_spinner=False)
-def fetch_historical_data(tickers_input, years, timeframe):
+def kpi_row(metrics: list):
+    cols = st.columns(len(metrics))
+    for col, m in zip(cols, metrics):
+        with col: kpi_tile(m.get("label", ""), m.get("value", "—"), m.get("sub", ""), m.get("positive", None))
+
+def allocation_table(assets: list, weights):
+    df = pd.DataFrame({"Asset": assets, "Peso": weights}).sort_values("Peso", ascending=False).reset_index(drop=True)
+    df["Allocazione"] = (df["Peso"] * 100).map(lambda x: f"{x:.2f} %")
+    st.table(df[["Asset", "Allocazione"]])
+
+ALIAS_MAP = {"SP500": "^GSPC", "NASDAQ": "^NDX", "DAX": "^GDAXI", "VIX": "^VIX", "GOLD": "GC=F", "OIL": "CL=F", "BTC": "BTC-USD"}
+
+def fetch_historical_data(tickers_input, years, timeframe="Giornaliero"):
     start_date = datetime.now() - timedelta(days=years*365)
     end_date = datetime.now()
     all_series = {}
     interval_map = {"Giornaliero": "1d", "Settimanale": "1wk", "Mensile": "1mo"}
     yf_interval = interval_map.get(timeframe, "1d")
-    
     for t in tickers_input:
         series = None
         try:
@@ -89,7 +87,6 @@ def fetch_historical_data(tickers_input, years, timeframe):
                 series = df[col].squeeze()
                 if isinstance(series, pd.Series): series = series.ffill()
         except: pass
-        
         if series is None and MSTARPY_AVAILABLE:
             try:
                 fund = mstarpy.Funds(term=t, country="it")
@@ -102,248 +99,200 @@ def fetch_historical_data(tickers_input, years, timeframe):
                     if timeframe == "Settimanale": series = series.resample('W').last().ffill()
                     elif timeframe == "Mensile": series = series.resample('ME').last().ffill()
             except: pass
-        
         if series is not None:
             series.name = t 
             all_series[t] = series
-            
     if all_series: return pd.DataFrame(all_series).ffill().dropna()
     return None
 
-# ==========================================
-# CORE MATH: ALLOCAZIONE AUTO (Legacy)
-# ==========================================
-def prep_data(df, assets, lookback, freq):
-    valid_assets = [c for c in assets if c in df.columns]
-    if not valid_assets: return None, None, "Nessun asset valido."
-    df = df[valid_assets]
-    if df.empty or len(df) < 10: return None, None, "Dati insufficienti."
-    df_res = df.resample(freq).last().dropna()
-    returns = df_res.pct_change().dropna()
-    ann_factor = 252 if freq == 'D' else 52 if freq == 'W' else 12
-    mu = returns.mean() * ann_factor
-    sigma = returns.cov() * ann_factor
-    return mu, sigma, (df_res, returns, ann_factor)
+def pie_chart(labels, values, title="Asset Allocation") -> go.Figure:
+    fig = go.Figure(go.Pie(labels=labels, values=values, hole=0.52, textinfo="label+percent"))
+    fig.update_layout(title=dict(text=title, x=0.5))
+    return fig
 
-def get_optimal_weights(mu, sigma, min_weight, max_weight, rf):
-    n = len(mu)
-    actual_max = max(max_weight, (1.0/n) + 0.01)
+def get_optimal_weights_auto(mu, sigma, min_weight, max_weight, rf):
+    num_assets = len(mu)
+    actual_max_weight = max(max_weight, (1.0 / num_assets) + 0.01)
     def neg_sharpe(w):
         vol = np.sqrt(np.dot(w.T, np.dot(sigma, w)))
         if vol <= 0: return 1e6
         return -(np.sum(mu * w) - rf) / vol
-    res = minimize(neg_sharpe, [1./n]*n, bounds=[(min_weight, actual_max)]*n,
-                   constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}), method='SLSQP')
+    res = minimize(neg_sharpe, [1./num_assets] * num_assets, bounds=[(min_weight, actual_max_weight)] * num_assets, constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}), method='SLSQP')
     return res.x if res.success else None
 
-def get_cvar_weights(returns_matrix, min_w, max_w, alpha=0.05):
-    n_assets, n_scenarios = returns_matrix.shape[1], returns_matrix.shape[0]
-    actual_max = max(max_w, (1.0/n_assets) + 0.01)
-    def cvar_obj(params):
-        w, gamma = params[:-1], params[-1]
-        shortfall = np.maximum(-np.dot(returns_matrix, w) - gamma, 0)
-        return gamma + np.sum(shortfall) / (alpha * n_scenarios)
-    init_w = [1./n_assets]*n_assets
-    init_gamma = -np.percentile(np.dot(returns_matrix, init_w), alpha * 100)
-    res = minimize(cvar_obj, np.append(init_w, init_gamma), method='SLSQP',
-                   bounds=[(min_w, actual_max)]*n_assets + [(None, None)],
-                   constraints=({'type': 'eq', 'fun': lambda x: np.sum(x[:-1]) - 1}))
-    return res.x[:-1] if res.success else None
+def prep_data_auto(df, assets, lookback, freq):
+    valid_assets = [c for c in assets if c in df.columns]
+    if not valid_assets: return None, None, "Nessun asset valido."
+    df = df[valid_assets]
+    df_res = df.resample(freq).last().dropna()
+    returns = df_res.pct_change().dropna()
+    ann_factor = 252 if freq == 'D' else 52 if freq == 'W' else 12
+    return returns.mean() * ann_factor, returns.cov() * ann_factor, (df_res, returns, ann_factor)
 
-# ==========================================
-# CORE MATH: ALLOCAZIONE A 3 (Legacy)
-# ==========================================
-def clean_asset_name(name): return re.sub(r'\s*\(.*\)', '', str(name)).strip()
+def portfolio_metrics_auto(weights, mu, sigma, rf) -> dict:
+    p_ret = float(np.sum(mu * weights))
+    p_vol = float(np.sqrt(np.dot(weights.T, np.dot(sigma, weights))))
+    return {"return": p_ret, "volatility": p_vol, "sharpe": (p_ret - rf) / p_vol if p_vol > 0 else 0.0}
 
-def get_advanced_stats(weights, returns, annual_factor):
-    port_series = returns.dot(np.array(weights))
+# ==============================================================================
+# BLOCCO 2: FUNZIONI ESATTE DI "ALLOCAZIONE A 3"
+# ==============================================================================
+def clean_asset_name_3(name):
+    return re.sub(r'\s*\(.*\)', '', str(name)).strip()
+
+def get_advanced_stats_3(weights, returns, annual_factor):
+    weights = np.array(weights)
+    port_series = returns.dot(weights)
     mean_ret = port_series.mean() * annual_factor
     volatility = port_series.std() * np.sqrt(annual_factor)
     sharpe = mean_ret / volatility if volatility != 0 else 0
-    downside_std = port_series[port_series < 0].std() * np.sqrt(annual_factor)
+    negative_returns = port_series[port_series < 0]
+    downside_std = negative_returns.std() * np.sqrt(annual_factor)
     sortino = mean_ret / downside_std if downside_std != 0 else 0
-    cum = (1 + port_series).cumprod()
-    mdd = ((cum - cum.cummax()) / cum.cummax()).min()
+    cumulative = (1 + port_series).cumprod()
+    peak = cumulative.cummax()
+    mdd = ((cumulative - peak) / peak).min()
     return mean_ret, volatility, sharpe, sortino, mdd
 
-def get_avg_correlation(data, assets):
+def get_avg_correlation_3(data, assets):
     if len(assets) < 2: return 1.0
-    corr = data[list(assets)].corr().values
-    return corr[np.triu_indices_from(corr, k=1)].mean()
+    corr_matrix = data[list(assets)].corr()
+    return corr_matrix.values[np.triu_indices_from(corr_matrix.values, k=1)].mean()
 
-def find_best_optimized_combination(data, k, annual_factor, max_corr, min_w):
+def optimize_portfolio_3(returns, annual_factor, min_weight=0.0):
+    n_assets = len(returns.columns)
+    if n_assets * min_weight > 1.0: return None 
+    def objective(w):
+        ret = np.sum(returns.mean() * w) * annual_factor
+        vol = np.sqrt(np.dot(w.T, np.dot(returns.cov() * annual_factor, w)))
+        return -(ret / vol if vol > 0 else 0)
+    res = minimize(objective, [1./n_assets]*n_assets, method='SLSQP', bounds=[(min_weight, 1)]*n_assets, constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}))
+    return res.x if res.success else None
+
+def find_best_optimized_combination_3(data, k, annual_factor, max_corr_threshold=1.0, min_w=0.0):
     assets = data.columns.tolist()
     if len(assets) < k or k * min_w > 1.0: return None, None, (0,0,0,0,0)
     best_sharpe, best_combo, best_weights, best_stats = -np.inf, None, None, None
-    
-    # Prevenzione esplosione combinatoria imposta nel refactoring
-    if len(assets) > 15 and k > 2: st.warning("⚠️ Troppi asset. L'analisi combinatoria a 3 tier potrebbe essere lenta.")
-    
     for combo in itertools.combinations(assets, k):
-        if get_avg_correlation(data, combo) <= max_corr:
+        if get_avg_correlation_3(data, combo) <= max_corr_threshold:
             subset = data[list(combo)].pct_change().dropna()
-            w = get_optimal_weights(subset.mean() * annual_factor, subset.cov() * annual_factor, min_w, 1.0, 0.0)
+            w = optimize_portfolio_3(subset, annual_factor, min_weight=min_w)
             if w is not None:
-                stats = get_advanced_stats(w, subset, annual_factor)
+                stats = get_advanced_stats_3(w, subset, annual_factor)
                 if stats[2] > best_sharpe:
                     best_sharpe, best_combo, best_weights, best_stats = stats[2], combo, w, stats
     return best_combo, best_weights, best_stats
 
-# ==========================================
-# UI RENDERING: ALLOCAZIONE AUTO
-# ==========================================
-def render_auto_allocation():
-    st.title("Allocazione Multi-Modello (Auto)")
-    df = st.session_state.df_historical
-    all_assets = df.columns.tolist()
+# ==============================================================================
+# ROUTING APP
+# ==============================================================================
+page = st.sidebar.radio("Navigazione Moduli", ["Allocazione Auto", "Allocazione a 3"])
+st.sidebar.divider()
+
+if page == "Allocazione Auto":
+    st.title("Portfolio Optimizer & Data Engine")
     
-    # Parametri UI (simulati dalla sidebar originale dell'Auto)
-    col1, col2, col3 = st.columns(3)
-    lookback = col1.slider("Orizzonte Rolling (Anni)", 1, 10, 3)
-    min_weight = col2.slider("Peso Minimo", 0.0, 0.2, 0.0)
-    max_weight = col3.slider("Peso Massimo", 0.1, 1.0, 0.4)
-    rf = 0.03 # Fisso per brevità
-    freq = 'D' if st.session_state.data_freq == "Giornaliero" else 'W' if st.session_state.data_freq == "Settimanale" else 'M'
-    
-    mu_strat, sigma_strat, meta = prep_data(df, all_assets, lookback, freq)
-    if mu_strat is None:
-        st.error(meta)
-        return
-    
-    tab1, tab2, tab3 = st.tabs(["📊 Dati", "📈 Markowitz", "🛡️ Antifragile (CVaR)"])
-    
-    with tab1:
-        st.dataframe(df.tail())
+    with st.sidebar:
+        st.header("1. Acquisizione Dati")
+        data_source_tab = st.radio("Sorgente Dati", ["API", "Upload File"])
+        tickers_input = []
+        uploaded_file = None
+        if data_source_tab == "API":
+            raw_input = st.text_area("Tickers", "^GSPC\nSWDA.MI")
+            years = st.selectbox("Anni Storico", [1, 3, 5, 10], index=1)
+            tickers_input = [ALIAS_MAP.get(t, t) for t in re.findall(r"[\w\.\-\^\=]+", raw_input.upper())]
+        else:
+            uploaded_file = st.file_uploader("Carica File", type=["csv", "xlsx"])
+            
+        data_freq = st.selectbox("Frequenza", ["Giornaliero", "Settimanale", "Mensile"])
+        
+        st.header("2. Parametri Ottimizzazione")
+        lookback = st.slider("Orizzonte Rolling (Anni)", 1, 10, 3)
+        min_weight = st.slider("Peso Minimo", 0.0, 0.2, 0.0)
+        max_weight = st.slider("Peso Massimo", 0.1, 1.0, 0.4)
+        rf = st.number_input("Risk Free (%)", 0.0, 10.0, 3.0)/100
+        
+        if st.button("🚀 GENERA SERIE STORICHE"):
+            df_data = None
+            if data_source_tab == "API" and tickers_input:
+                df_data = fetch_historical_data(tickers_input, years, data_freq)
+            elif uploaded_file:
+                try:
+                    df_data = pd.read_csv(uploaded_file, index_col=0, parse_dates=True) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file, index_col=0, parse_dates=True)
+                    df_data = df_data.select_dtypes(include=[np.number]).dropna()
+                except: pass
+                
+            if df_data is not None and not df_data.empty:
+                st.session_state.shared_df = df_data
+                st.session_state.shared_assets = df_data.columns.tolist()
+                st.session_state.shared_freq = 252 if data_freq == "Giornaliero" else 52 if data_freq == "Settimanale" else 12
+                st.success("Dati caricati in memoria!")
+            else: st.error("Errore caricamento dati.")
+
+    if st.session_state.shared_df is not None:
+        df = st.session_state.shared_df
+        assets = st.session_state.shared_assets
+        freq = 'D' if st.session_state.shared_freq == 252 else 'W' if st.session_state.shared_freq == 52 else 'M'
+        
+        st.subheader("Serie Storiche Generate")
         st.line_chart((df / df.iloc[0]) * 100)
         
-    with tab2:
-        w_mk = get_optimal_weights(mu_strat, sigma_strat, min_weight, max_weight, rf)
-        if w_mk is not None:
-            c1, c2 = st.columns(2)
-            c1.dataframe(pd.DataFrame({"Asset": all_assets, "Peso": w_mk}).sort_values("Peso", ascending=False))
-            fig = px.pie(values=w_mk, names=all_assets, title="Allocazione Markowitz", hole=0.5)
-            c2.plotly_chart(fig)
-            
-    with tab3:
-        w_cvar = get_cvar_weights(meta[1].values, min_weight, max_weight)
-        if w_cvar is not None:
-            c1, c2 = st.columns(2)
-            c1.dataframe(pd.DataFrame({"Asset": all_assets, "Peso": w_cvar}).sort_values("Peso", ascending=False))
-            fig = px.pie(values=w_cvar, names=all_assets, title="Allocazione Min-CVaR", hole=0.5)
-            c2.plotly_chart(fig)
+        mu_strat, sigma_strat, meta = prep_data_auto(df, assets, lookback, freq)
+        if mu_strat is not None:
+            st.subheader("Ottimizzazione Markowitz")
+            w_mk = get_optimal_weights_auto(mu_strat, sigma_strat, min_weight, max_weight, rf)
+            if w_mk is not None:
+                m_mk = portfolio_metrics_auto(w_mk, mu_strat, sigma_strat, rf)
+                kpi_row([
+                    {"label": "Rendimento", "value": f"{m_mk['return']*100:.2f}%"},
+                    {"label": "Volatilità", "value": f"{m_mk['volatility']*100:.2f}%"},
+                    {"label": "Sharpe", "value": f"{m_mk['sharpe']:.3f}"}
+                ])
+                c1, c2 = st.columns(2)
+                with c1: allocation_table(assets, w_mk)
+                with c2: st.plotly_chart(pie_chart(assets, w_mk))
 
-# ==========================================
-# UI RENDERING: ALLOCAZIONE A 3 TIER
-# ==========================================
-def render_tier_allocation():
-    st.title("Allocazione 3-Tier Model")
-    df = st.session_state.df_historical
-    assets = df.columns.tolist()
-    ann_factor = st.session_state.ann_factor
+elif page == "Allocazione a 3":
+    st.title("🛡️ Quant Allocation: 3-Tier Model")
     
-    c1, c2 = st.columns(2)
-    max_corr = c1.slider("Max Correlazione Ammessa", 0.0, 1.0, 1.0)
-    min_w = c2.slider("Peso Minimo Asset (%)", 0, 33, 10) / 100.0
-    
-    with st.spinner('Calcolo Ottimizzazione Combinatoria... (potrebbe richiedere tempo se > 15 asset)'):
-        # L1: Best Single
-        sharpes = {a: get_advanced_stats([1], df[[a]].pct_change().dropna(), ann_factor)[2] for a in assets}
-        best_single = max(sharpes, key=sharpes.get)
-        l1_stats = get_advanced_stats([1], df[[best_single]].pct_change().dropna(), ann_factor)
-        
-        # L2 & L3
-        l2_assets, l2_w, l2_stats = find_best_optimized_combination(df, 2, ann_factor, max_corr, max(min_w, 0.01))
-        l3_assets, l3_w, l3_stats = find_best_optimized_combination(df, 3, ann_factor, max_corr, max(min_w, 0.01))
-        
-    st.subheader("Performance Tier")
-    cols = st.columns(3)
-    def draw_box(col, title, stats, assets_names):
-        if stats is None: return col.warning(f"{title}: Nessun asset soddisfa i vincoli.")
-        r, v, s, sort, mdd = stats
-        col.info(f"**{title}**\n\nAsset: {assets_names}\n\nSharpe: {s:.2f}\n\nRend: {r*100:.1f}%\n\nMDD: {mdd*100:.1f}%")
-        
-    draw_box(cols[0], "Linea 1", l1_stats, best_single)
-    draw_box(cols[1], "Linea 2", l2_stats, ", ".join(l2_assets) if l2_assets else "N/A")
-    draw_box(cols[2], "Linea 3", l3_stats, ", ".join(l3_assets) if l3_assets else "N/A")
-
-# ==========================================
-# UI RENDERING: METHODOLOGY
-# ==========================================
-def render_methodology():
-    st.title("Nota Metodologica & Assunzioni del Modello")
-    st.markdown("""
-    ### 1. Generazione e Trattamento Dati
-    Il Data Engine acquisisce serie storiche in formato **Total Return (Adjusted Close)** tramite API (Yahoo Finance) o scraping NAV (Morningstar). L'uso di dati Total Return è critico per internalizzare l'effetto capitalizzato di dividendi e cedole. I dati vengono allineati temporalmente e i missing values riempiti tramite metodo *forward-fill* per evitare bias di look-ahead. I rendimenti sono calcolati in logica discreta (prospettiva multi-periodo).
-
-    ### 2. Ottimizzazione del Portafoglio
-    L'architettura unifica due filosofie quantitative:
-    * **Motore Auto (Markowitz & CVaR):** Implementa l'ottimizzazione Media-Varianza classica (SLSQP) soggetta a vincoli lineari. Per mitigare la fragilità statistica di Markowitz (error-maximization), il modulo integra l'ottimizzazione **Min-CVaR (Expected Shortfall a coda 5%)**, spostando il focus dalla varianza simmetrica al Tail Risk puro.
-    * **Motore a 3-Tier:** Utilizza un approccio combinatorio a forza bruta. Esplora il subspazio di tutte le combinazioni possibili di $k \in \{1, 2, 3\}$ asset, scartando i cluster che superano la soglia di correlazione imposta dall'utente, e applicando l'ottimizzatore sui subset filtrati.
-
-    ### 3. Assunzioni Statistiche
-    * **Stazionarietà:** I modelli classici assumono implicitamente che i rendimenti passati (vettori $\mu$ e matrici $\Sigma$) siano stimatori non distorti del futuro.
-    * **Distribuzione:** L'ottimizzazione basata sulla varianza assume normalità dei rendimenti, assioma fallace nei mercati reali (leptocurtosi). Il modulo CVaR rilassa questa assunzione operando sui quantili storici empirici.
-
-    ### 4. Limiti del Modello e Rischi (Overfitting)
-    Il framework è profondamente esposto al rischio di **Curve-Fitting**. In particolare, il Motore a 3-Tier agisce come un selettore ex-post: estraendo la combinazione storica ottimale su un campione limitato, tende a sovrastimare massicciamente le performance out-of-sample. Si raccomanda l'uso di questi strumenti a fini diagnostici e di stress-testing, non come oracoli allocativi.
-    """)
-
-# ==========================================
-# SIDEBAR & ROUTING MASTER
-# ==========================================
-with st.sidebar:
-    st.header("⚙️ Data Engine Input")
-    
-    input_type = st.radio("Sorgente Dati", ["API (Ticker/ISIN)", "Upload File (CSV/Excel)"])
-    tickers_input = []
-    uploaded_file = None
-    
-    if input_type == "API (Ticker/ISIN)":
-        raw_text = st.text_area("Inserisci Ticker/ISIN", "^GSPC\nSWDA.MI\nGC=F")
-        tickers_input = [t if t not in ALIAS_MAP else ALIAS_MAP[t] for t in re.findall(r"[\w\.\-\^\=]+", raw_text.upper())]
-        years = st.selectbox("Anni Storico", [1, 3, 5, 10], index=1)
+    if st.session_state.shared_df is None:
+        st.warning("Nessun dato in memoria. Torna alla scheda 'Allocazione Auto' e genera le serie storiche prima di usare questo modulo.")
     else:
-        uploaded_file = st.file_uploader("Carica File", type=["csv", "xlsx"])
+        df = st.session_state.shared_df
+        assets = st.session_state.shared_assets
+        annual_factor = st.session_state.shared_freq
         
-    timeframe = st.selectbox("Frequenza Dati", ["Giornaliero", "Settimanale", "Mensile"])
-    
-    if st.button("🚀 Genera Serie Storiche", use_container_width=True):
-        with st.spinner("Acquisizione Dati in corso..."):
-            df_temp = None
-            if input_type == "API (Ticker/ISIN)" and tickers_input:
-                df_temp = fetch_historical_data(tickers_input, years, timeframe)
-            elif input_type == "Upload File (CSV/Excel)" and uploaded_file:
-                # Logica semplificata upload (Ereditata da Allocazione Auto)
-                try:
-                    df_temp = pd.read_csv(uploaded_file, index_col=0, parse_dates=True) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file, index_col=0, parse_dates=True)
-                    df_temp = df_temp.select_dtypes(include=[np.number]).dropna()
-                except: st.error("Errore lettura file")
-            
-            if df_temp is not None and not df_temp.empty:
-                st.session_state.df_historical = df_temp
-                st.session_state.data_freq = timeframe
-                st.session_state.ann_factor = 252 if timeframe == "Giornaliero" else 52 if timeframe == "Settimanale" else 12
-                st.success("Dati Acquisiti e Condivisi in Memoria!")
-            else:
-                st.error("Fallimento estrazione dati.")
-                
-    st.divider()
-    st.header("🧭 Navigazione Moduli")
-    
-    # Custom Router
-    if st.button("📊 Modulo Auto (Multi-Model)", use_container_width=True): st.session_state.current_view = "auto"
-    if st.button("🧬 Modulo 3-Tier Combinatorio", use_container_width=True): st.session_state.current_view = "tier"
-    if st.button("📘 Nota Metodologica", use_container_width=True): st.session_state.current_view = "method"
+        with st.sidebar:
+            st.header("Filtri Strategici")
+            max_corr_input = st.slider("Max Correlazione Ammessa", 0.0, 1.0, 1.0, 0.05)
+            min_weight_pct = st.slider("Peso Minimo per Asset (%)", 0, 33, 10, 1)
+            min_weight_val = min_weight_pct / 100.0
 
-# ==========================================
-# RENDERER PRINCIPALE
-# ==========================================
-if st.session_state.df_historical is None and st.session_state.current_view != "method":
-    st.info("👈 Compila i parametri nella sidebar e clicca su 'Genera Serie Storiche' per avviare il motore quantitativo condiviso.")
-else:
-    if st.session_state.current_view == "auto":
-        render_auto_allocation()
-    elif st.session_state.current_view == "tier":
-        render_tier_allocation()
-    elif st.session_state.current_view == "method":
-        render_methodology()
+        with st.spinner('Calcolo Ottimizzazione Combinatoria (potrebbe richiedere tempo)...'):
+            # L1
+            temp_sharpes = {a: get_advanced_stats_3([1], df[[a]].pct_change().dropna(), annual_factor)[2] for a in assets}
+            best_single = max(temp_sharpes, key=temp_sharpes.get)
+            manual_asset = st.selectbox("Seleziona Linea 1", assets, index=assets.index(best_single) if best_single in assets else 0)
+            l1_stats = get_advanced_stats_3([1], df[[manual_asset]].pct_change().dropna(), annual_factor)
+            
+            # L2 & L3
+            forced_min_w = max(min_weight_val, 0.01)
+            pair_assets, pair_weights, pair_stats = find_best_optimized_combination_3(df, 2, annual_factor, max_corr_input, forced_min_w)
+            triplet_assets, triplet_weights, triplet_stats = find_best_optimized_combination_3(df, 3, annual_factor, max_corr_input, forced_min_w)
+
+        st.subheader("Risultati Allocazione Combinatoria")
+        table_data = []
+        def make_row(label, asset_list, weights, stats):
+            if stats is None: return None
+            r, v, s, sort, mdd = stats
+            comp_str = f"{clean_asset_name_3(asset_list)} (100%)" if isinstance(asset_list, str) else " + ".join([f"{clean_asset_name_3(a)} ({w*100:.0f}%)" for a, w in zip(asset_list, weights) if w > 0.001])
+            return {"Strategia": label, "Allocazione": comp_str, "Sharpe": f"{s:.2f}", "Rendimento": f"{r*100:.1f}%", "Max DD": f"{mdd*100:.1f}%"}
+            
+        r1 = make_row("Linea 1", manual_asset, [1], l1_stats)
+        if r1: table_data.append(r1)
+        r2 = make_row("Linea 2 (Best Pair)", pair_assets, pair_weights, pair_stats)
+        if r2: table_data.append(r2)
+        r3 = make_row("Linea 3 (Best Triplet)", triplet_assets, triplet_weights, triplet_stats)
+        if r3: table_data.append(r3)
+        
+        st.table(pd.DataFrame(table_data))
