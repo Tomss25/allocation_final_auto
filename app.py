@@ -398,6 +398,13 @@ elif page == "Allocazione Auto":
             with c1: st.plotly_chart(equity_line_chart((df/df.iloc[0])*100, "Performance Storica"), use_container_width=True)
             with c2: st.dataframe(pd.DataFrame(metrics).set_index("Ticker"), height=400)
             
+            st.markdown("#### Dati Storici Grezzi")
+            st.dataframe(df.sort_index(ascending=False).round(2), use_container_width=True, height=300)
+            df_export = df.copy()
+            df_export.index.name = "Data"
+            csv = df_export.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
+            st.download_button(label="📥 SCARICA CSV DATI", data=csv, file_name="serie_storiche.csv", mime="text/csv")
+            
             fig, ax = plt.subplots(figsize=(10, 6))
             sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax)
             st.pyplot(fig)
@@ -545,10 +552,17 @@ elif page == "Allocazione a 3":
     max_corr = c1.slider("Max Correlazione Ammessa", 0.0, 1.0, 1.0)
     min_w = c2.slider("Peso Minimo Combinatorio (%)", 0, 33, 10)/100.0
 
+    # Calcolo e selezione manuale per Linea 1
+    temp_sharpes = {a: get_advanced_stats_3([1], df[[a]].pct_change().dropna(), ann_factor)[2] for a in assets}
+    best_single = max(temp_sharpes, key=temp_sharpes.get)
+    try: default_idx = assets.index(best_single)
+    except: default_idx = 0
+    
+    manual_asset = st.selectbox("Linea 1 (Asset Manuale)", assets, index=default_idx)
+
     with st.spinner('Calcolo Ottimizzazione Combinatoria (Forza Bruta)...'):
-        temp_sharpes = {a: get_advanced_stats_3([1], df[[a]].pct_change().dropna(), ann_factor)[2] for a in assets}
-        best_single = max(temp_sharpes, key=temp_sharpes.get)
-        l1_stats = get_advanced_stats_3([1], df[[best_single]].pct_change().dropna(), ann_factor)
+        l1_ret_frame = df[[manual_asset]].pct_change().dropna()
+        l1_stats = get_advanced_stats_3([1], l1_ret_frame, ann_factor)
         
         forced_min_w = max(min_w, 0.01)
         p_assets, p_w, p_stats = find_best_optimized_combination_3(df, 2, ann_factor, max_corr, forced_min_w)
@@ -562,7 +576,7 @@ elif page == "Allocazione a 3":
         comp = f"{clean_asset_name_3(a_list)} (100%)" if isinstance(a_list, str) else " + ".join([f"{clean_asset_name_3(a)} ({w*100:.0f}%)" for a, w in zip(a_list, w_list) if w > 0.001])
         return {"Strategia": label, "Allocazione": comp, "Sharpe": f"{s:.2f}", "Rend": f"{r*100:.1f}%", "Max DD": f"{mdd*100:.1f}%"}
         
-    r1 = make_row("L1 (Best Single)", best_single, [1], l1_stats)
+    r1 = make_row("L1 (Manuale)", manual_asset, [1], l1_stats)
     if r1: table_data.append(r1)
     r2 = make_row("L2 (Best Pair)", p_assets, p_w, p_stats)
     if r2: table_data.append(r2)
@@ -571,13 +585,33 @@ elif page == "Allocazione a 3":
     
     if table_data: 
         st.table(pd.DataFrame(table_data))
+        
         st.markdown("#### Visualizzazione Allocazioni")
         c_pie1, c_pie2, c_pie3 = st.columns(3)
         with c_pie1:
-            if r1: st.plotly_chart(pie_chart([best_single], [1], "Linea 1"), use_container_width=True)
+            if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
         with c_pie2:
             if r2 and p_assets: st.plotly_chart(pie_chart(list(p_assets), p_w, "Linea 2"), use_container_width=True)
         with c_pie3:
             if r3 and t_assets: st.plotly_chart(pie_chart(list(t_assets), t_w, "Linea 3"), use_container_width=True)
+            
+        st.markdown("#### Simulazione Storica Comparativa")
+        common_idx = l1_ret_frame.index
+        l2_series, l3_series = None, None
+        if p_assets: 
+            l2_series = df[list(p_assets)].pct_change().dropna().dot(p_w)
+            common_idx = common_idx.intersection(l2_series.index)
+        if t_assets: 
+            l3_series = df[list(t_assets)].pct_change().dropna().dot(t_w)
+            common_idx = common_idx.intersection(l3_series.index)
+            
+        chart_df = pd.DataFrame(index=common_idx)
+        chart_df[f"L1: {clean_asset_name_3(manual_asset)}"] = (1 + l1_ret_frame.loc[common_idx][manual_asset]).cumprod() * 100
+        if p_assets and l2_series is not None: chart_df["L2: Best Pair"] = (1 + l2_series.loc[common_idx]).cumprod() * 100
+        if t_assets and l3_series is not None: chart_df["L3: Best Triplet"] = (1 + l3_series.loc[common_idx]).cumprod() * 100
+        
+        fig_comp = px.line(chart_df, x=chart_df.index, y=chart_df.columns, template='plotly_white')
+        fig_comp.update_layout(yaxis_title="Valore (Base 100)", legend=dict(orientation="h", y=1.1, title=None))
+        st.plotly_chart(fig_comp, use_container_width=True)
     else: 
         st.warning("Nessuna combinazione soddisfa i criteri.")
