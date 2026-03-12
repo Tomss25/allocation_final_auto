@@ -54,7 +54,15 @@ st.markdown(f"""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
     .stApp {{ background-color: {BG_PRIMARY} !important; color: {TEXT_PRIMARY}; font-family: 'Inter', sans-serif; }}
-    [data-testid="stSidebar"] {{ background-color: {BG_SECONDARY} !important; border-right: 2px solid {BORDER_COLOR}; }}
+    
+    /* MODIFIED SIDEBAR CSS - NAVY BLUE WITH HIGH CONTRAST */
+    [data-testid="stSidebar"] {{ background-color: #1A365D !important; border-right: none; }}
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label, [data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] > p {{ color: #FFFFFF !important; }}
+    [data-testid="stSidebar"] .section-header {{ color: #90CDF4 !important; border-bottom: 2px solid #2C5282; }}
+    [data-testid="stSidebar"] hr {{ border-color: #2C5282 !important; margin: 1rem 0; }}
+    [data-testid="stSidebar"] div[data-baseweb="select"] > div, [data-testid="stSidebar"] textarea, [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {{ background-color: #0F2537 !important; color: #FFFFFF !important; border: 1px solid #2C5282 !important; }}
+    /* END MODIFIED SIDEBAR CSS */
+
     h1, h2, h3, h4 {{ color: {COLOR_HIGHLIGHT} !important; font-weight: 700; }}
     .kpi-tile {{ background: linear-gradient(135deg, {BG_CARD} 0%, #F7FAFC 100%); border: 2px solid {BORDER_COLOR}; border-radius: {BORDER_RADIUS}; padding: 1.4rem 1.6rem; text-align: center; position: relative; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); }}
     .kpi-tile::before {{ content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, {COLOR_HIGHLIGHT}, {COLOR_ACCENT}); }}
@@ -561,5 +569,15 @@ elif page == "Allocazione a 3":
     r3 = make_row("L3 (Best Triplet)", t_assets, t_w, t_stats)
     if r3: table_data.append(r3)
     
-    if table_data: st.table(pd.DataFrame(table_data))
-    else: st.warning("Nessuna combinazione soddisfa i criteri.")
+    if table_data: 
+        st.table(pd.DataFrame(table_data))
+        st.markdown("#### Visualizzazione Allocazioni")
+        c_pie1, c_pie2, c_pie3 = st.columns(3)
+        with c_pie1:
+            if r1: st.plotly_chart(pie_chart([best_single], [1], "Linea 1"), use_container_width=True)
+        with c_pie2:
+            if r2 and p_assets: st.plotly_chart(pie_chart(list(p_assets), p_w, "Linea 2"), use_container_width=True)
+        with c_pie3:
+            if r3 and t_assets: st.plotly_chart(pie_chart(list(t_assets), t_w, "Linea 3"), use_container_width=True)
+    else: 
+        st.warning("Nessuna combinazione soddisfa i criteri.")
