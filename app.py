@@ -444,7 +444,7 @@ elif page == "Allocazione Auto":
             csv = df_export.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
             st.download_button(label="📥 SCARICA CSV DATI", data=csv, file_name="serie_storiche.csv", mime="text/csv")
             
-            fig, ax = plt.subplots(figsize=(8, 5))  # <--- Modificato qui
+            fig, ax = plt.subplots(figsize=(8, 5))
             sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax)
             st.pyplot(fig)
 
@@ -545,7 +545,19 @@ elif page == "Allocazione Auto":
                 with c2: st.plotly_chart(drawdown_chart(nav, "Drawdown"), use_container_width=True)
                 
                 st.markdown("#### Analisi Strategica del Backtest")
-                st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se la linea del Drawdown rompe la tua soglia psicologica di tolleranza, il tuo modello teorico è già fallito nella pratica. Smetti di guardare il rendimento assoluto e concentrati esclusivamente sulla severità dei drawdown nei periodi di stress di mercato.")
+                
+                mdd_assets = ((df_res - df_res.cummax()) / df_res.cummax()).min() * 100
+                mdd_ports = ((nav - nav.cummax()) / nav.cummax()).min() * 100
+                
+                mdd_df = pd.DataFrame({
+                    "Nome": list(mdd_assets.index) + list(mdd_ports.index),
+                    "Tipologia": ["Asset Singolo"] * len(mdd_assets) + ["Portafoglio Simulato"] * len(mdd_ports),
+                    "Max Drawdown (%)": list(mdd_assets.values) + list(mdd_ports.values)
+                }).sort_values("Max Drawdown (%)")
+                
+                st.table(mdd_df.style.format({"Max Drawdown (%)": "{:.2f}%"}))
+                
+                st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se il Drawdown dei portafogli rompe la tua soglia psicologica o non giustifica il rischio rispetto alla caduta libera degli asset singoli (vedi tabella sopra), il tuo modello teorico ha fallito. Smetti di guardare il rendimento assoluto e fissa questi numeri negativi: sono il prezzo che pagherai nei periodi di panico.")
 
         # TAB 6: PROIEZIONE
         with tab6:
@@ -577,7 +589,12 @@ elif page == "Allocazione Auto":
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown("#### Analisi Strategica della Proiezione")
-                st.markdown("Stai guardando un cono generato da un Moto Browniano Geometrico, un modello che assume ingenuamente che la volatilità futura sarà identica a quella passata. La linea mediana è puro rumore statistico. Il tuo vero focus deve essere la banda inferiore (5%). Se quella linea scende al di sotto del tuo capitale di sopravvivenza, la tua allocazione attuale ha un rischio di rovina matematica inaccettabile. Non usare questa proiezione per sognare profitti, usala per quantificare i tuoi rischi peggiori.")
+                st.markdown(f"**Prospettive a {anni_futuri} anni (Capitale Iniziale: 100):**")
+                st.markdown(f"- **Scenario Pessimistico (5% probabilità):** Il capitale crolla a **{perc[0][-1]:.2f}** (CAGR: **{((perc[0][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                st.markdown(f"- **Scenario Mediano (50% probabilità):** Il capitale arriva a **{perc[2][-1]:.2f}** (CAGR: **{((perc[2][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                st.markdown(f"- **Scenario Ottimistico (95% probabilità):** Il capitale arriva a **{perc[4][-1]:.2f}** (CAGR: **{((perc[4][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                
+                st.markdown("Stai guardando un cono generato da un Moto Browniano Geometrico, un modello che assume ingenuamente che la volatilità futura sarà identica a quella passata. La linea mediana e le stime ottimistiche sono puro rumore statistico. Il tuo vero focus deve essere la **banda inferiore (5%)**. Se quella linea scende al di sotto del tuo capitale di sopravvivenza, la tua allocazione attuale ha un rischio di rovina matematica inaccettabile. Non usare questa proiezione per sognare profitti, usala per quantificare i tuoi rischi peggiori.")
 
         # TAB 7: LIVE
         with tab7:
