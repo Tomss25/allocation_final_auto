@@ -444,19 +444,6 @@ elif page == "Allocazione Auto":
             csv = df_export.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
             st.download_button(label="📥 SCARICA CSV DATI", data=csv, file_name="serie_storiche.csv", mime="text/csv")
             
-            df_metrics = pd.DataFrame(metrics)
-            c_bar1, c_bar2 = st.columns(2)
-            with c_bar1:
-                fig_ret = px.bar(df_metrics, x="Rend %", y="Ticker", orientation='h', title="Return %")
-                fig_ret.update_layout(**PLOTLY_LAYOUT)
-                fig_ret.update_yaxes(autorange="reversed")
-                st.plotly_chart(fig_ret, use_container_width=True)
-            with c_bar2:
-                fig_vol = px.bar(df_metrics, x="Volat %", y="Ticker", orientation='h', title="Volatilità %")
-                fig_vol.update_layout(**PLOTLY_LAYOUT)
-                fig_vol.update_yaxes(autorange="reversed")
-                st.plotly_chart(fig_vol, use_container_width=True)
-
             fig, ax = plt.subplots(figsize=(8, 5))
             sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax)
             st.pyplot(fig)
