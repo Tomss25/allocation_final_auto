@@ -131,7 +131,9 @@ def allocation_table(assets: list, weights):
 def _base_fig(**kwargs) -> go.Figure: return go.Figure(layout=go.Layout(**{**PLOTLY_LAYOUT, **kwargs}))
 
 def pie_chart(labels, values, title="Asset Allocation") -> go.Figure:
-    fig = go.Figure(go.Pie(labels=labels, values=values, hole=0.52, textinfo="label+percent"))
+    total = sum(values) if sum(values) > 0 else 1
+    legend_labels = [f"{l} ({(v/total)*100:.1f}%)" for l, v in zip(labels, values)]
+    fig = go.Figure(go.Pie(labels=legend_labels, values=values, hole=0.52, textinfo="none"))
     fig.update_layout(**{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)})
     return fig
 
@@ -541,6 +543,9 @@ elif page == "Allocazione Auto":
                 c1, c2 = st.columns(2)
                 with c1: st.plotly_chart(equity_line_chart(nav, "Backtest"), use_container_width=True)
                 with c2: st.plotly_chart(drawdown_chart(nav, "Drawdown"), use_container_width=True)
+                
+                st.markdown("#### Analisi Strategica del Backtest")
+                st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se la linea del Drawdown rompe la tua soglia psicologica di tolleranza, il tuo modello teorico è già fallito nella pratica. Smetti di guardare il rendimento assoluto e concentrati esclusivamente sulla severità dei drawdown nei periodi di stress di mercato.")
 
         # TAB 6: PROIEZIONE
         with tab6:
@@ -570,6 +575,9 @@ elif page == "Allocazione Auto":
                 fig.add_trace(go.Scatter(x=dates, y=perc[0], mode='lines', fill='tonexty', fillcolor=_hex_to_rgba(COLOR_HIGHLIGHT, 0.1), name='Banda 5-95%'))
                 fig.add_trace(go.Scatter(x=dates, y=perc[2], mode='lines', line=dict(color=COLOR_HIGHLIGHT, width=3), name='Mediana (P50)'))
                 st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("#### Analisi Strategica della Proiezione")
+                st.markdown("Stai guardando un cono generato da un Moto Browniano Geometrico, un modello che assume ingenuamente che la volatilità futura sarà identica a quella passata. La linea mediana è puro rumore statistico. Il tuo vero focus deve essere la banda inferiore (5%). Se quella linea scende al di sotto del tuo capitale di sopravvivenza, la tua allocazione attuale ha un rischio di rovina matematica inaccettabile. Non usare questa proiezione per sognare profitti, usala per quantificare i tuoi rischi peggiori.")
 
         # TAB 7: LIVE
         with tab7:
