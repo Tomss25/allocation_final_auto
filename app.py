@@ -444,7 +444,7 @@ elif page == "Allocazione Auto":
             csv = df_export.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
             st.download_button(label="📥 SCARICA CSV DATI", data=csv, file_name="serie_storiche.csv", mime="text/csv")
             
-            fig, ax = plt.subplots(figsize=(10, 6))
+            fig, ax = plt.subplots(figsize=(8, 5))  # <--- Modificato qui
             sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax)
             st.pyplot(fig)
 
