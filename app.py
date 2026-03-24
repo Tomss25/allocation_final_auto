@@ -350,16 +350,12 @@ with st.sidebar:
                 source_name = "Yahoo/Morningstar"
             elif input_type == "Upload File (CSV/Excel)" and uploaded_file:
                 try:
-                    # Leggiamo il file senza forzare il decimale per evitare errori con le stringhe
                     if uploaded_file.name.endswith('.csv'):
                         df_temp = pd.read_csv(uploaded_file, sep=';', index_col=0, parse_dates=True)
                     else:
                         df_temp = pd.read_excel(uploaded_file, index_col=0, parse_dates=True)
                     
-                    # Applichiamo la patch di pulizia che scambia le virgole e interpola
                     df_temp = clean_and_interpolate_dataframe(df_temp)
-                    
-                    # Forziamo a numerico e droppiamo eventuali rimanenze sporche
                     df_temp = df_temp.select_dtypes(include=[np.number]).dropna()
                     source_name = "Upload CSV/Excel"
                 except Exception as e:
@@ -558,6 +554,67 @@ elif page == "Allocazione Auto":
                 st.table(mdd_df.style.format({"Max Drawdown (%)": "{:.2f}%"}))
                 
                 st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se il Drawdown dei portafogli rompe la tua soglia psicologica o non giustifica il rischio rispetto alla caduta libera degli asset singoli (vedi tabella sopra), il tuo modello teorico ha fallito. Smetti di guardare il rendimento assoluto e fissa questi numeri negativi: sono il prezzo che pagherai nei periodi di panico.")
+
+                # ==========================================
+                # INIZIO SEZIONE CUSTOM (AGGIUNTA COME RICHIESTO)
+                # ==========================================
+                st.markdown("---")
+                st.markdown("#### 🛠️ Comparazione Portafoglio Custom / Benchmark")
+                custom_mode = st.radio("Metodo di inserimento:", ["Modifica Pesi Manuali", "Benchmark Esterno (Ticker/ISIN)"], horizontal=True)
+                
+                custom_nav = None
+                custom_name = "Custom"
+                
+                if custom_mode == "Modifica Pesi Manuali":
+                    st.markdown("Definisci i pesi statici per gli asset attuali (verranno normalizzati a 100% se non combaciano):")
+                    custom_weights = []
+                    cols = st.columns(min(len(all_assets), 4))
+                    for idx, asset in enumerate(all_assets):
+                        with cols[idx % len(cols)]:
+                            w = st.number_input(f"{asset} %", min_value=0.0, max_value=100.0, value=100.0/len(all_assets), step=1.0, key=f"w_{asset}")
+                            custom_weights.append(w)
+                            
+                    if st.button("Esegui Backtest Custom (Pesi)", use_container_width=True):
+                        w_array = np.array(custom_weights)
+                        if w_array.sum() > 0: w_array = w_array / w_array.sum()
+                        
+                        # Calcolo ritorni sul periodo walk-forward
+                        custom_ret = returns_wf.loc[df_wf.index].dot(w_array)
+                        custom_nav = (1 + custom_ret).cumprod() * 100
+                        custom_name = "Custom (Pesi Statici)"
+                        
+                else:
+                    custom_ticker = st.text_input("Inserisci Ticker o ISIN (es. SWDA.MI)")
+                    if st.button("Esegui Backtest Custom (Ticker)", use_container_width=True):
+                        if custom_ticker:
+                            with st.spinner(f"Scaricamento dati per {custom_ticker}..."):
+                                # Uso 20 anni per essere sicuro di coprire il periodo del backtest storico
+                                df_bench = fetch_historical_data([custom_ticker], 20, freq_str)
+                                if df_bench is not None and not df_bench.empty:
+                                    bench_ret = df_bench.pct_change().dropna()
+                                    # Allineamento con le date del backtest
+                                    common_dates = bench_ret.index.intersection(df_wf.index)
+                                    if len(common_dates) > 0:
+                                        custom_ret = bench_ret.loc[common_dates].iloc[:, 0]
+                                        custom_nav = (1 + custom_ret).cumprod() * 100
+                                        custom_name = f"Benchmark ({custom_ticker})"
+                                        nav = nav.loc[common_dates] # Riallinea il nav base per correttezza del grafico
+                                    else:
+                                        st.error("Nessuna data in comune tra il benchmark e il periodo di backtest.")
+                                else:
+                                    st.error("Impossibile scaricare i dati per il Ticker inserito.")
+                
+                if custom_nav is not None:
+                    fig_custom = _base_fig(title=dict(text="Backtest Comparativo: Modelli Dinamici vs Custom Line", x=0))
+                    for col in nav.columns:
+                        fig_custom.add_trace(go.Scatter(x=nav.index, y=nav[col], name=col, mode="lines", opacity=0.5))
+                    
+                    fig_custom.add_trace(go.Scatter(x=custom_nav.index, y=custom_nav.values, name=custom_name, mode="lines", line=dict(color='red', width=3)))
+                    fig_custom.update_layout(yaxis_title="NAV (Base 100)", hovermode="x unified")
+                    st.plotly_chart(fig_custom, use_container_width=True)
+                # ==========================================
+                # FINE SEZIONE CUSTOM
+                # ==========================================
 
         # TAB 6: PROIEZIONE
         with tab6:
