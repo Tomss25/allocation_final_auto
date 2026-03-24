@@ -556,7 +556,7 @@ elif page == "Allocazione Auto":
                 st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se il Drawdown dei portafogli rompe la tua soglia psicologica o non giustifica il rischio rispetto alla caduta libera degli asset singoli (vedi tabella sopra), il tuo modello teorico ha fallito. Smetti di guardare il rendimento assoluto e fissa questi numeri negativi: sono il prezzo che pagherai nei periodi di panico.")
 
                 # ==========================================
-                # INIZIO SEZIONE CUSTOM (AGGIUNTA COME RICHIESTO)
+                # INIZIO SEZIONE CUSTOM (PATCH MULTI-ISIN)
                 # ==========================================
                 st.markdown("---")
                 st.markdown("#### 🛠️ Comparazione Portafoglio Custom / Benchmark")
@@ -584,25 +584,35 @@ elif page == "Allocazione Auto":
                         custom_name = "Custom (Pesi Statici)"
                         
                 else:
-                    custom_ticker = st.text_input("Inserisci Ticker o ISIN (es. SWDA.MI)")
-                    if st.button("Esegui Backtest Custom (Ticker)", use_container_width=True):
-                        if custom_ticker:
-                            with st.spinner(f"Scaricamento dati per {custom_ticker}..."):
-                                # Uso 20 anni per essere sicuro di coprire il periodo del backtest storico
-                                df_bench = fetch_historical_data([custom_ticker], 20, freq_str)
-                                if df_bench is not None and not df_bench.empty:
-                                    bench_ret = df_bench.pct_change().dropna()
-                                    # Allineamento con le date del backtest
-                                    common_dates = bench_ret.index.intersection(df_wf.index)
-                                    if len(common_dates) > 0:
-                                        custom_ret = bench_ret.loc[common_dates].iloc[:, 0]
-                                        custom_nav = (1 + custom_ret).cumprod() * 100
-                                        custom_name = f"Benchmark ({custom_ticker})"
-                                        nav = nav.loc[common_dates] # Riallinea il nav base per correttezza del grafico
+                    custom_ticker_raw = st.text_input("Inserisci Ticker o ISIN separati da spazio (es. SWDA.MI EIMI.MI)")
+                    if st.button("Esegui Backtest Custom (Ticker/ISIN)", use_container_width=True):
+                        if custom_ticker_raw:
+                            parsed_tickers = [ALIAS_MAP.get(t, t) for t in re.findall(r"[\w\.\-\^\=]+", custom_ticker_raw.upper())]
+                            if parsed_tickers:
+                                with st.spinner(f"Scaricamento dati per {len(parsed_tickers)} asset..."):
+                                    # Uso 20 anni per coprire sicuramente il backtest
+                                    df_bench = fetch_historical_data(parsed_tickers, 20, freq_str)
+                                    if df_bench is not None and not df_bench.empty:
+                                        bench_ret = df_bench.pct_change().dropna()
+                                        common_dates = bench_ret.index.intersection(df_wf.index)
+                                        if len(common_dates) > 0:
+                                            # Costruzione automatica EW per permettere la vista unificata
+                                            ew_weights = np.array([1.0 / len(df_bench.columns)] * len(df_bench.columns))
+                                            custom_ret = bench_ret.loc[common_dates].dot(ew_weights)
+                                            custom_nav = (1 + custom_ret).cumprod() * 100
+                                            
+                                            if len(parsed_tickers) == 1:
+                                                custom_name = f"Benchmark ({parsed_tickers[0]})"
+                                            else:
+                                                custom_name = f"Benchmark Custom EW ({len(parsed_tickers)} Asset)"
+                                                
+                                            nav = nav.loc[common_dates] # Riallinea il nav base per correttezza del grafico
+                                        else:
+                                            st.error("Nessuna data in comune tra il benchmark e il periodo di backtest.")
                                     else:
-                                        st.error("Nessuna data in comune tra il benchmark e il periodo di backtest.")
-                                else:
-                                    st.error("Impossibile scaricare i dati per il Ticker inserito.")
+                                        st.error("Impossibile scaricare i dati per i Ticker inseriti.")
+                            else:
+                                st.error("Ticker non validi o formato non riconosciuto.")
                 
                 if custom_nav is not None:
                     fig_custom = _base_fig(title=dict(text="Backtest Comparativo: Modelli Dinamici vs Custom Line", x=0))
