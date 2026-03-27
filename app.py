@@ -440,9 +440,12 @@ elif page == "Allocazione Auto":
             csv = df_export.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
             st.download_button(label="📥 SCARICA CSV DATI", data=csv, file_name="serie_storiche.csv", mime="text/csv")
             
-            fig, ax = plt.subplots(figsize=(8, 5))
-            sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax)
-            st.pyplot(fig)
+            fig, ax = plt.subplots(figsize=(4, 2.5))
+            sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax, annot_kws={"size": 7})
+            ax.tick_params(labelsize=7)
+            col_spacer_l, col_chart, col_spacer_r = st.columns([1.5, 2, 1.5]) 
+            with col_chart:
+                st.pyplot(fig)
 
         # TAB 2: MARKOWITZ
         with tab2:
@@ -644,102 +647,4 @@ elif page == "Allocazione Auto":
                 sim = np.zeros((giorni+1, n_sim))
                 sim[0] = 100.0
                 Z = np.random.standard_normal((giorni, n_sim))
-                sim[1:] = np.exp((p_mu - 0.5*p_vol**2)*dt + p_vol*np.sqrt(dt)*Z)
-                sim = np.cumprod(sim, axis=0)
-                perc = np.percentile(sim, [5, 25, 50, 75, 95], axis=1)
-                
-                fig = _base_fig(title=dict(text="Cono Incertezza Pesi CVaR", x=0))
-                dates = pd.date_range(start=pd.Timestamp.today(), periods=giorni+1, freq='B')
-                fig.add_trace(go.Scatter(x=dates, y=perc[4], mode='lines', line=dict(width=0), showlegend=False))
-                fig.add_trace(go.Scatter(x=dates, y=perc[0], mode='lines', fill='tonexty', fillcolor=_hex_to_rgba(COLOR_HIGHLIGHT, 0.1), name='Banda 5-95%'))
-                fig.add_trace(go.Scatter(x=dates, y=perc[2], mode='lines', line=dict(color=COLOR_HIGHLIGHT, width=3), name='Mediana (P50)'))
-                st.plotly_chart(fig, use_container_width=True)
-                
-                st.markdown("#### Analisi Strategica della Proiezione")
-                st.markdown(f"**Prospettive a {anni_futuri} anni (Capitale Iniziale: 100):**")
-                st.markdown(f"- **Scenario Pessimistico (5% probabilità):** Il capitale crolla a **{perc[0][-1]:.2f}** (CAGR: **{((perc[0][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
-                st.markdown(f"- **Scenario Mediano (50% probabilità):** Il capitale arriva a **{perc[2][-1]:.2f}** (CAGR: **{((perc[2][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
-                st.markdown(f"- **Scenario Ottimistico (95% probabilità):** Il capitale arriva a **{perc[4][-1]:.2f}** (CAGR: **{((perc[4][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
-                
-                st.markdown("Stai guardando un cono generato da un Moto Browniano Geometrico, un modello che assume ingenuamente che la volatilità futura sarà identica a quella passata. La linea mediana e le stime ottimistiche sono puro rumore statistico. Il tuo vero focus deve essere la **banda inferiore (5%)**. Se quella linea scende al di sotto del tuo capitale di sopravvivenza, la tua allocazione attuale ha un rischio di rovina matematica inaccettabile. Non usare questa proiezione per sognare profitti, usala per quantificare i tuoi rischi peggiori.")
-
-        # TAB 7: LIVE
-        with tab7:
-            st.markdown('<div class="section-header">Live Market Widgets</div>', unsafe_allow_html=True)
-            c1, c2 = st.columns([2,1])
-            with c1: components.html('<iframe src="https://sslecal2.investing.com?ecoDayBackground=%23FFFFFF&defaultFont=%231A202C&borderColor=%23E2E8F0&columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&features=datepicker,timezone&countries=25,32,6,37,72,22,17,39,14,10,35,43,56,36,110,11,26,12,4,5&calType=week&timeZone=8&lang=1" width="650" height="467" frameborder="0"></iframe>', height=500)
-            with c2: components.html('<iframe src="https://ssltsw.investing.com?lang=1&forex=1,2,3,5,7,9,10&commodities=8830,8836,8831,8849,8833,8862,8832&indices=175,166,172,27,179,170,174&stocks=345,346,347,348,349,350,352&tabs=1,2,3,4" width="317" height="467"></iframe>', height=500)
-
-elif page == "Allocazione a 3":
-    st.title("🛡️ Quant Allocation: 3-Tier Model")
-    df = st.session_state.shared_df
-    assets = st.session_state.shared_assets
-    freq_str = st.session_state.shared_freq
-    ann_factor = 252 if freq_str == "Giornaliero" else 52 if freq_str == "Settimanale" else 12
-
-    c1, c2 = st.columns(2)
-    max_corr = c1.slider("Max Correlazione Ammessa", 0.0, 1.0, 1.0)
-    min_w = c2.slider("Peso Minimo Combinatorio (%)", 0, 33, 10)/100.0
-
-    temp_sharpes = {a: get_advanced_stats_3([1], df[[a]].pct_change().dropna(), ann_factor)[2] for a in assets}
-    best_single = max(temp_sharpes, key=temp_sharpes.get)
-    try: default_idx = assets.index(best_single)
-    except: default_idx = 0
-    
-    manual_asset = st.selectbox("Linea 1 (Asset Manuale)", assets, index=default_idx)
-
-    with st.spinner('Calcolo Ottimizzazione Combinatoria (Forza Bruta)...'):
-        l1_ret_frame = df[[manual_asset]].pct_change().dropna()
-        l1_stats = get_advanced_stats_3([1], l1_ret_frame, ann_factor)
-        
-        forced_min_w = max(min_w, 0.01)
-        p_assets, p_w, p_stats = find_best_optimized_combination_3(df, 2, ann_factor, max_corr, forced_min_w)
-        t_assets, t_w, t_stats = find_best_optimized_combination_3(df, 3, ann_factor, max_corr, forced_min_w)
-
-    st.subheader("Performance Tier")
-    table_data = []
-    def make_row(label, a_list, w_list, stats):
-        if stats is None: return None
-        r, v, s, sort, mdd = stats
-        comp = f"{clean_asset_name_3(a_list)} (100%)" if isinstance(a_list, str) else " + ".join([f"{clean_asset_name_3(a)} ({w*100:.0f}%)" for a, w in zip(a_list, w_list) if w > 0.001])
-        return {"Strategia": label, "Allocazione": comp, "Sharpe": f"{s:.2f}", "Rend": f"{r*100:.1f}%", "Max DD": f"{mdd*100:.1f}%"}
-        
-    r1 = make_row("L1 (Manuale)", manual_asset, [1], l1_stats)
-    if r1: table_data.append(r1)
-    r2 = make_row("L2 (Best Pair)", p_assets, p_w, p_stats)
-    if r2: table_data.append(r2)
-    r3 = make_row("L3 (Best Triplet)", t_assets, t_w, t_stats)
-    if r3: table_data.append(r3)
-    
-    if table_data: 
-        st.table(pd.DataFrame(table_data))
-        
-        st.markdown("#### Visualizzazione Allocazioni")
-        c_pie1, c_pie2, c_pie3 = st.columns(3)
-        with c_pie1:
-            if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
-        with c_pie2:
-            if r2 and p_assets: st.plotly_chart(pie_chart(list(p_assets), p_w, "Linea 2"), use_container_width=True)
-        with c_pie3:
-            if r3 and t_assets: st.plotly_chart(pie_chart(list(t_assets), t_w, "Linea 3"), use_container_width=True)
-            
-        st.markdown("#### Simulazione Storica Comparativa")
-        common_idx = l1_ret_frame.index
-        l2_series, l3_series = None, None
-        if p_assets: 
-            l2_series = df[list(p_assets)].pct_change().dropna().dot(p_w)
-            common_idx = common_idx.intersection(l2_series.index)
-        if t_assets: 
-            l3_series = df[list(t_assets)].pct_change().dropna().dot(t_w)
-            common_idx = common_idx.intersection(l3_series.index)
-            
-        chart_df = pd.DataFrame(index=common_idx)
-        chart_df[f"L1: {clean_asset_name_3(manual_asset)}"] = (1 + l1_ret_frame.loc[common_idx][manual_asset]).cumprod() * 100
-        if p_assets and l2_series is not None: chart_df["L2: Best Pair"] = (1 + l2_series.loc[common_idx]).cumprod() * 100
-        if t_assets and l3_series is not None: chart_df["L3: Best Triplet"] = (1 + l3_series.loc[common_idx]).cumprod() * 100
-        
-        fig_comp = px.line(chart_df, x=chart_df.index, y=chart_df.columns, template='plotly_white')
-        fig_comp.update_layout(yaxis_title="Valore (Base 100)", legend=dict(orientation="h", y=1.1, title=None))
-        st.plotly_chart(fig_comp, use_container_width=True)
-    else: 
-        st.warning("Nessuna combinazione soddisfa i criteri.")
+                sim[1:] = np.exp((p
