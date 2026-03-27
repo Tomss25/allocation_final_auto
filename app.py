@@ -134,7 +134,12 @@ def pie_chart(labels, values, title="Asset Allocation") -> go.Figure:
     total = sum(values) if sum(values) > 0 else 1
     legend_labels = [f"{l} ({(v/total)*100:.1f}%)" for l, v in zip(labels, values)]
     fig = go.Figure(go.Pie(labels=legend_labels, values=values, hole=0.52, textinfo="none"))
-    fig.update_layout(**{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)})
+    # Patch applicata: Legenda spostata in basso e margini ridotti per massimizzare il cerchio
+    fig.update_layout(
+        **{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)},
+        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5),
+        margin=dict(t=50, b=20, l=10, r=10)
+    )
     return fig
 
 def equity_line_chart(nav_df: pd.DataFrame, title="Equity Line Comparativa (Base 100)") -> go.Figure:
@@ -351,7 +356,6 @@ with st.sidebar:
             elif input_type == "Upload File (CSV/Excel)" and uploaded_file:
                 try:
                     if uploaded_file.name.endswith('.csv'):
-                        # Fallback di lettura per CSV
                         try:
                             df_temp = pd.read_csv(uploaded_file, sep=';', index_col=0)
                         except:
@@ -360,7 +364,6 @@ with st.sidebar:
                     else:
                         df_temp = pd.read_excel(uploaded_file, index_col=0)
                     
-                    # FORZATURA ASSOLUTA DATETIME PER L'INDICE
                     df_temp.index = pd.to_datetime(df_temp.index, dayfirst=True, errors='coerce')
                     df_temp = df_temp[df_temp.index.notnull()]
                     
@@ -567,9 +570,6 @@ elif page == "Allocazione Auto":
                 
                 st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se il Drawdown dei portafogli rompe la tua soglia psicologica o non giustifica il rischio rispetto alla caduta libera degli asset singoli (vedi tabella sopra), il tuo modello teorico ha fallito. Smetti di guardare il rendimento assoluto e fissa questi numeri negativi: sono il prezzo che pagherai nei periodi di panico.")
 
-                # ==========================================
-                # INIZIO SEZIONE CUSTOM (PATCH MULTI-ISIN)
-                # ==========================================
                 st.markdown("---")
                 st.markdown("#### 🛠️ Comparazione Portafoglio Custom / Benchmark")
                 custom_mode = st.radio("Metodo di inserimento:", ["Modifica Pesi Manuali", "Benchmark Esterno (Ticker/ISIN)"], horizontal=True)
@@ -590,7 +590,6 @@ elif page == "Allocazione Auto":
                         w_array = np.array(custom_weights)
                         if w_array.sum() > 0: w_array = w_array / w_array.sum()
                         
-                        # Calcolo ritorni sul periodo walk-forward
                         custom_ret = returns_wf.loc[df_wf.index].dot(w_array)
                         custom_nav = (1 + custom_ret).cumprod() * 100
                         custom_name = "Custom (Pesi Statici)"
@@ -602,13 +601,11 @@ elif page == "Allocazione Auto":
                             parsed_tickers = [ALIAS_MAP.get(t, t) for t in re.findall(r"[\w\.\-\^\=]+", custom_ticker_raw.upper())]
                             if parsed_tickers:
                                 with st.spinner(f"Scaricamento dati per {len(parsed_tickers)} asset..."):
-                                    # Uso 20 anni per coprire sicuramente il backtest
                                     df_bench = fetch_historical_data(parsed_tickers, 20, freq_str)
                                     if df_bench is not None and not df_bench.empty:
                                         bench_ret = df_bench.pct_change().dropna()
                                         common_dates = bench_ret.index.intersection(df_wf.index)
                                         if len(common_dates) > 0:
-                                            # Costruzione automatica EW per permettere la vista unificata
                                             ew_weights = np.array([1.0 / len(df_bench.columns)] * len(df_bench.columns))
                                             custom_ret = bench_ret.loc[common_dates].dot(ew_weights)
                                             custom_nav = (1 + custom_ret).cumprod() * 100
@@ -618,7 +615,7 @@ elif page == "Allocazione Auto":
                                             else:
                                                 custom_name = f"Benchmark Custom EW ({len(parsed_tickers)} Asset)"
                                                 
-                                            nav = nav.loc[common_dates] # Riallinea il nav base per correttezza del grafico
+                                            nav = nav.loc[common_dates] 
                                         else:
                                             st.error("Nessuna data in comune tra il benchmark e il periodo di backtest.")
                                     else:
@@ -634,9 +631,6 @@ elif page == "Allocazione Auto":
                     fig_custom.add_trace(go.Scatter(x=custom_nav.index, y=custom_nav.values, name=custom_name, mode="lines", line=dict(color='red', width=3)))
                     fig_custom.update_layout(yaxis_title="NAV (Base 100)", hovermode="x unified")
                     st.plotly_chart(fig_custom, use_container_width=True)
-                # ==========================================
-                # FINE SEZIONE CUSTOM
-                # ==========================================
 
         # TAB 6: PROIEZIONE
         with tab6:
@@ -728,7 +722,6 @@ elif page == "Allocazione a 3":
         
         st.markdown("#### Visualizzazione Allocazioni")
         
-        # PATCH APPLICATA: Ripristino delle 3 colonne come richiesto (affiancati)
         c_pie1, c_pie2, c_pie3 = st.columns(3)
         with c_pie1:
             if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
