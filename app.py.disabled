@@ -1,6 +1,7 @@
 """
 Unified Quantitative Allocation Platform
 Architettura integrata: Motore Dati Condiviso + Multi-Model Routing
+(Include Patch di Sanitizzazione Dati CSV e Forzatura Datetime)
 """
 
 import streamlit as st
@@ -61,8 +62,7 @@ st.markdown(f"""
     [data-testid="stSidebar"] .section-header {{ color: #90CDF4 !important; border-bottom: 2px solid #2C5282; }}
     [data-testid="stSidebar"] hr {{ border-color: #2C5282 !important; margin: 1rem 0; }}
     [data-testid="stSidebar"] div[data-baseweb="select"] > div, [data-testid="stSidebar"] textarea, [data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {{ background-color: #0F2537 !important; color: #FFFFFF !important; border: 1px solid #2C5282 !important; }}
-    /* END MODIFIED SIDEBAR CSS */
-
+    
     h1, h2, h3, h4 {{ color: {COLOR_HIGHLIGHT} !important; font-weight: 700; }}
     .kpi-tile {{ background: linear-gradient(135deg, {BG_CARD} 0%, #F7FAFC 100%); border: 2px solid {BORDER_COLOR}; border-radius: {BORDER_RADIUS}; padding: 1.4rem 1.6rem; text-align: center; position: relative; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); }}
     .kpi-tile::before {{ content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, {COLOR_HIGHLIGHT}, {COLOR_ACCENT}); }}
@@ -82,6 +82,33 @@ if 'shared_df' not in st.session_state: st.session_state.shared_df = None
 if 'shared_assets' not in st.session_state: st.session_state.shared_assets = []
 if 'shared_freq' not in st.session_state: st.session_state.shared_freq = "Giornaliero"
 if 'data_source' not in st.session_state: st.session_state.data_source = None
+
+# ==========================================
+# ETL & DATA SANITIZATION (Patch Temporanea)
+# ==========================================
+def clean_and_interpolate_dataframe(df):
+    """
+    Individua valori anomali ('undefined'), standardizza il formato numerico
+    e applica interpolazione lineare. (Inquina la volatilità reale).
+    """
+    df = df.replace('undefined', np.nan)
+    
+    for col in df.columns:
+        if df[col].dtype == 'object' or df[col].dtype == 'string':
+            df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+            
+    n = len(df)
+    for col in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[col]): continue
+        for i in range(n):
+            if pd.isna(df.iloc[i, df.columns.get_loc(col)]):
+                if i == 0:
+                    if n > 2: df.iloc[i, df.columns.get_loc(col)] = (df.iloc[i+1, df.columns.get_loc(col)] + df.iloc[i+2, df.columns.get_loc(col)]) / 2
+                elif i == n - 1:
+                    if n > 2: df.iloc[i, df.columns.get_loc(col)] = (df.iloc[i-1, df.columns.get_loc(col)] + df.iloc[i-2, df.columns.get_loc(col)]) / 2
+                else:
+                    df.iloc[i, df.columns.get_loc(col)] = (df.iloc[i-1, df.columns.get_loc(col)] + df.iloc[i+1, df.columns.get_loc(col)]) / 2
+    return df
 
 # ==========================================
 # UI HELPERS E GRAFICI
@@ -104,7 +131,9 @@ def allocation_table(assets: list, weights):
 def _base_fig(**kwargs) -> go.Figure: return go.Figure(layout=go.Layout(**{**PLOTLY_LAYOUT, **kwargs}))
 
 def pie_chart(labels, values, title="Asset Allocation") -> go.Figure:
-    fig = go.Figure(go.Pie(labels=labels, values=values, hole=0.52, textinfo="label+percent"))
+    total = sum(values) if sum(values) > 0 else 1
+    legend_labels = [f"{l} ({(v/total)*100:.1f}%)" for l, v in zip(labels, values)]
+    fig = go.Figure(go.Pie(labels=legend_labels, values=values, hole=0.52, textinfo="none"))
     fig.update_layout(**{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)})
     return fig
 
@@ -321,10 +350,25 @@ with st.sidebar:
                 source_name = "Yahoo/Morningstar"
             elif input_type == "Upload File (CSV/Excel)" and uploaded_file:
                 try:
-                    df_temp = pd.read_csv(uploaded_file, sep=';', decimal=',', index_col=0, parse_dates=True) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file, index_col=0, parse_dates=True)
+                    if uploaded_file.name.endswith('.csv'):
+                        # Fallback di lettura per CSV
+                        try:
+                            df_temp = pd.read_csv(uploaded_file, sep=';', index_col=0)
+                        except:
+                            uploaded_file.seek(0)
+                            df_temp = pd.read_csv(uploaded_file, sep=',', index_col=0)
+                    else:
+                        df_temp = pd.read_excel(uploaded_file, index_col=0)
+                    
+                    # FORZATURA ASSOLUTA DATETIME PER L'INDICE
+                    df_temp.index = pd.to_datetime(df_temp.index, dayfirst=True, errors='coerce')
+                    df_temp = df_temp[df_temp.index.notnull()]
+                    
+                    df_temp = clean_and_interpolate_dataframe(df_temp)
                     df_temp = df_temp.select_dtypes(include=[np.number]).dropna()
                     source_name = "Upload CSV/Excel"
-                except: st.error("Errore lettura file")
+                except Exception as e:
+                    st.error(f"Errore lettura o sanitizzazione file: {e}")
             
             if df_temp is not None and not df_temp.empty:
                 st.session_state.shared_df = df_temp
@@ -405,9 +449,12 @@ elif page == "Allocazione Auto":
             csv = df_export.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
             st.download_button(label="📥 SCARICA CSV DATI", data=csv, file_name="serie_storiche.csv", mime="text/csv")
             
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax)
-            st.pyplot(fig)
+            fig, ax = plt.subplots(figsize=(4, 2.5))
+            sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax, annot_kws={"size": 7})
+            ax.tick_params(labelsize=7)
+            col_spacer_l, col_chart, col_spacer_r = st.columns([1.5, 2, 1.5]) 
+            with col_chart:
+                st.pyplot(fig)
 
         # TAB 2: MARKOWITZ
         with tab2:
@@ -504,6 +551,92 @@ elif page == "Allocazione Auto":
                 c1, c2 = st.columns(2)
                 with c1: st.plotly_chart(equity_line_chart(nav, "Backtest"), use_container_width=True)
                 with c2: st.plotly_chart(drawdown_chart(nav, "Drawdown"), use_container_width=True)
+                
+                st.markdown("#### Analisi Strategica del Backtest")
+                
+                mdd_assets = ((df_res - df_res.cummax()) / df_res.cummax()).min() * 100
+                mdd_ports = ((nav - nav.cummax()) / nav.cummax()).min() * 100
+                
+                mdd_df = pd.DataFrame({
+                    "Nome": list(mdd_assets.index) + list(mdd_ports.index),
+                    "Tipologia": ["Asset Singolo"] * len(mdd_assets) + ["Portafoglio Simulato"] * len(mdd_ports),
+                    "Max Drawdown (%)": list(mdd_assets.values) + list(mdd_ports.values)
+                }).sort_values("Max Drawdown (%)")
+                
+                st.table(mdd_df.style.format({"Max Drawdown (%)": "{:.2f}%"}))
+                
+                st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se il Drawdown dei portafogli rompe la tua soglia psicologica o non giustifica il rischio rispetto alla caduta libera degli asset singoli (vedi tabella sopra), il tuo modello teorico ha fallito. Smetti di guardare il rendimento assoluto e fissa questi numeri negativi: sono il prezzo che pagherai nei periodi di panico.")
+
+                # ==========================================
+                # INIZIO SEZIONE CUSTOM (PATCH MULTI-ISIN)
+                # ==========================================
+                st.markdown("---")
+                st.markdown("#### 🛠️ Comparazione Portafoglio Custom / Benchmark")
+                custom_mode = st.radio("Metodo di inserimento:", ["Modifica Pesi Manuali", "Benchmark Esterno (Ticker/ISIN)"], horizontal=True)
+                
+                custom_nav = None
+                custom_name = "Custom"
+                
+                if custom_mode == "Modifica Pesi Manuali":
+                    st.markdown("Definisci i pesi statici per gli asset attuali (verranno normalizzati a 100% se non combaciano):")
+                    custom_weights = []
+                    cols = st.columns(min(len(all_assets), 4))
+                    for idx, asset in enumerate(all_assets):
+                        with cols[idx % len(cols)]:
+                            w = st.number_input(f"{asset} %", min_value=0.0, max_value=100.0, value=100.0/len(all_assets), step=1.0, key=f"w_{asset}")
+                            custom_weights.append(w)
+                            
+                    if st.button("Esegui Backtest Custom (Pesi)", use_container_width=True):
+                        w_array = np.array(custom_weights)
+                        if w_array.sum() > 0: w_array = w_array / w_array.sum()
+                        
+                        # Calcolo ritorni sul periodo walk-forward
+                        custom_ret = returns_wf.loc[df_wf.index].dot(w_array)
+                        custom_nav = (1 + custom_ret).cumprod() * 100
+                        custom_name = "Custom (Pesi Statici)"
+                        
+                else:
+                    custom_ticker_raw = st.text_input("Inserisci Ticker o ISIN separati da spazio (es. SWDA.MI EIMI.MI)")
+                    if st.button("Esegui Backtest Custom (Ticker/ISIN)", use_container_width=True):
+                        if custom_ticker_raw:
+                            parsed_tickers = [ALIAS_MAP.get(t, t) for t in re.findall(r"[\w\.\-\^\=]+", custom_ticker_raw.upper())]
+                            if parsed_tickers:
+                                with st.spinner(f"Scaricamento dati per {len(parsed_tickers)} asset..."):
+                                    # Uso 20 anni per coprire sicuramente il backtest
+                                    df_bench = fetch_historical_data(parsed_tickers, 20, freq_str)
+                                    if df_bench is not None and not df_bench.empty:
+                                        bench_ret = df_bench.pct_change().dropna()
+                                        common_dates = bench_ret.index.intersection(df_wf.index)
+                                        if len(common_dates) > 0:
+                                            # Costruzione automatica EW per permettere la vista unificata
+                                            ew_weights = np.array([1.0 / len(df_bench.columns)] * len(df_bench.columns))
+                                            custom_ret = bench_ret.loc[common_dates].dot(ew_weights)
+                                            custom_nav = (1 + custom_ret).cumprod() * 100
+                                            
+                                            if len(parsed_tickers) == 1:
+                                                custom_name = f"Benchmark ({parsed_tickers[0]})"
+                                            else:
+                                                custom_name = f"Benchmark Custom EW ({len(parsed_tickers)} Asset)"
+                                                
+                                            nav = nav.loc[common_dates] # Riallinea il nav base per correttezza del grafico
+                                        else:
+                                            st.error("Nessuna data in comune tra il benchmark e il periodo di backtest.")
+                                    else:
+                                        st.error("Impossibile scaricare i dati per i Ticker inseriti.")
+                            else:
+                                st.error("Ticker non validi o formato non riconosciuto.")
+                
+                if custom_nav is not None:
+                    fig_custom = _base_fig(title=dict(text="Backtest Comparativo: Modelli Dinamici vs Custom Line", x=0))
+                    for col in nav.columns:
+                        fig_custom.add_trace(go.Scatter(x=nav.index, y=nav[col], name=col, mode="lines", opacity=0.5))
+                    
+                    fig_custom.add_trace(go.Scatter(x=custom_nav.index, y=custom_nav.values, name=custom_name, mode="lines", line=dict(color='red', width=3)))
+                    fig_custom.update_layout(yaxis_title="NAV (Base 100)", hovermode="x unified")
+                    st.plotly_chart(fig_custom, use_container_width=True)
+                # ==========================================
+                # FINE SEZIONE CUSTOM
+                # ==========================================
 
         # TAB 6: PROIEZIONE
         with tab6:
@@ -533,6 +666,14 @@ elif page == "Allocazione Auto":
                 fig.add_trace(go.Scatter(x=dates, y=perc[0], mode='lines', fill='tonexty', fillcolor=_hex_to_rgba(COLOR_HIGHLIGHT, 0.1), name='Banda 5-95%'))
                 fig.add_trace(go.Scatter(x=dates, y=perc[2], mode='lines', line=dict(color=COLOR_HIGHLIGHT, width=3), name='Mediana (P50)'))
                 st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("#### Analisi Strategica della Proiezione")
+                st.markdown(f"**Prospettive a {anni_futuri} anni (Capitale Iniziale: 100):**")
+                st.markdown(f"- **Scenario Pessimistico (5% probabilità):** Il capitale crolla a **{perc[0][-1]:.2f}** (CAGR: **{((perc[0][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                st.markdown(f"- **Scenario Mediano (50% probabilità):** Il capitale arriva a **{perc[2][-1]:.2f}** (CAGR: **{((perc[2][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                st.markdown(f"- **Scenario Ottimistico (95% probabilità):** Il capitale arriva a **{perc[4][-1]:.2f}** (CAGR: **{((perc[4][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                
+                st.markdown("Stai guardando un cono generato da un Moto Browniano Geometrico, un modello che assume ingenuamente che la volatilità futura sarà identica a quella passata. La linea mediana e le stime ottimistiche sono puro rumore statistico. Il tuo vero focus deve essere la **banda inferiore (5%)**. Se quella linea scende al di sotto del tuo capitale di sopravvivenza, la tua allocazione attuale ha un rischio di rovina matematica inaccettabile. Non usare questa proiezione per sognare profitti, usala per quantificare i tuoi rischi peggiori.")
 
         # TAB 7: LIVE
         with tab7:
@@ -552,7 +693,6 @@ elif page == "Allocazione a 3":
     max_corr = c1.slider("Max Correlazione Ammessa", 0.0, 1.0, 1.0)
     min_w = c2.slider("Peso Minimo Combinatorio (%)", 0, 33, 10)/100.0
 
-    # Calcolo e selezione manuale per Linea 1
     temp_sharpes = {a: get_advanced_stats_3([1], df[[a]].pct_change().dropna(), ann_factor)[2] for a in assets}
     best_single = max(temp_sharpes, key=temp_sharpes.get)
     try: default_idx = assets.index(best_single)
