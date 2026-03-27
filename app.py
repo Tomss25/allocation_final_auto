@@ -727,13 +727,11 @@ elif page == "Allocazione a 3":
         st.table(pd.DataFrame(table_data))
         
         st.markdown("#### Visualizzazione Allocazioni")
-        c_pie1, c_pie2, c_pie3 = st.columns(3)
-        with c_pie1:
-            if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
-        with c_pie2:
-            if r2 and p_assets: st.plotly_chart(pie_chart(list(p_assets), p_w, "Linea 2"), use_container_width=True)
-        with c_pie3:
-            if r3 and t_assets: st.plotly_chart(pie_chart(list(t_assets), t_w, "Linea 3"), use_container_width=True)
+        
+        # PATCH APPLICATA: rimozione colonne per forzare rendering a larghezza intera
+        if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
+        if r2 and p_assets: st.plotly_chart(pie_chart(list(p_assets), p_w, "Linea 2"), use_container_width=True)
+        if r3 and t_assets: st.plotly_chart(pie_chart(list(t_assets), t_w, "Linea 3"), use_container_width=True)
             
         st.markdown("#### Simulazione Storica Comparativa")
         common_idx = l1_ret_frame.index
