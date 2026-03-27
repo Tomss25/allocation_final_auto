@@ -375,4 +375,383 @@ with st.sidebar:
                 st.session_state.shared_assets = df_temp.columns.tolist()
                 st.session_state.shared_freq = timeframe
                 st.session_state.data_source = source_name
-                st.success("✅ Dati
+                st.success("✅ Dati Acquisiti e Condivisi in Memoria!")
+            else:
+                st.error("❌ Fallimento estrazione dati.")
+
+# ==========================================
+# RENDER VIEWS
+# ==========================================
+if page == "Nota Metodologica":
+    st.title("Nota Metodologica & Assunzioni del Modello")
+    st.markdown("""
+    ### 1. Generazione e Trattamento Dati
+    Il Data Engine acquisisce serie storiche in formato **Total Return (Adjusted Close)** tramite API (Yahoo Finance) o scraping NAV (Morningstar). L'uso di dati Total Return è critico per internalizzare l'effetto capitalizzato di dividendi e cedole. I dati vengono allineati temporalmente e i missing values riempiti tramite metodo *forward-fill* per evitare bias di look-ahead. 
+
+    ### 2. Ottimizzazione del Portafoglio
+    L'architettura unifica due filosofie quantitative:
+    * **Motore Auto (Markowitz & CVaR):** Implementa l'ottimizzazione Media-Varianza classica (SLSQP). Per mitigare la fragilità statistica di Markowitz, il modulo integra l'ottimizzazione **Min-CVaR (Expected Shortfall a coda 5%)**, spostando il focus dal rischio simmetrico al Tail Risk puro. Include stress test via simulazione di Montecarlo e backtest Walk-Forward.
+    * **Motore a 3-Tier:** Esplora a forza bruta il subspazio di tutte le combinazioni possibili di $k \in \{1, 2, 3\}$ asset, applicando l'ottimizzatore sui subset filtrati tramite matrici di correlazione massima.
+
+    ### 3. Assunzioni Statistiche
+    * **Stazionarietà:** I modelli classici assumono implicitamente che i rendimenti passati siano stimatori non distorti del futuro.
+    * **Distribuzione:** La varianza assume normalità dei rendimenti, assioma fallace. Il modulo CVaR e le proiezioni stocastiche rilassano questa assunzione.
+
+    ### 4. Limiti del Modello e Rischi (Overfitting)
+    Il framework è profondamente esposto al rischio di **Curve-Fitting**. In particolare, il Motore a 3-Tier agisce come un selettore ex-post: estraendo la combinazione storica ottimale, tende a sovrastimare massicciamente le performance out-of-sample.
+    """)
+
+elif st.session_state.shared_df is None:
+    st.markdown("""
+    <div style="text-align:center; padding:6rem 2rem;">
+        <div style="font-size:4rem; margin-bottom:1.5rem;">📊</div>
+        <div style="font-size:1.3rem; font-weight:700; color:#1A365D; margin-bottom:0.8rem;">Benvenuto nel Portfolio Optimizer Unificato</div>
+        <div style="font-size:0.95rem; color:#4A5568;">Configura i parametri nella <b>sidebar</b> e premi <b>GENERA SERIE STORICHE</b> per avviare entrambi i motori analitici.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+elif page == "Allocazione Auto":
+    st.title("Portfolio Optimizer & Data Engine")
+    df = st.session_state.shared_df
+    all_assets = st.session_state.shared_assets
+    freq_str = st.session_state.shared_freq
+    freq_code = 'D' if freq_str == "Giornaliero" else 'W' if freq_str == "Settimanale" else 'M'
+    
+    st.markdown(f"**Sorgente:** {st.session_state.data_source} | **Periodo:** {df.index[0].strftime('%d/%m/%Y')} → {df.index[-1].strftime('%d/%m/%Y')} | **Asset:** {len(all_assets)}")
+    
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Serie Storiche", "📈 Markowitz", "🎲 Montecarlo", "🛡️ Antifragile", "📉 Backtest", "🔮 Proiezione", "💹 Mercato Live"])
+
+    with st.spinner("Preparazione Dati Core..."):
+        mu_strat, sigma_strat, meta = prep_data(df, all_assets, lookback, freq_code)
+    
+    if mu_strat is None:
+        st.error(meta)
+    else:
+        df_res, returns_wf, ann_factor_opt = meta
+        
+        # TAB 1: SERIE STORICHE
+        with tab1:
+            st.markdown('<div class="section-header">Analisi Serie Storiche</div>', unsafe_allow_html=True)
+            metrics = []
+            for col in df.columns:
+                s = df[col]
+                ret = s.pct_change().dropna()
+                metrics.append({"Ticker": col, "Prezzo": round(s.iloc[-1], 2), "Rend %": round(((s.iloc[-1]/s.iloc[0])-1)*100, 2), "Volat %": round(ret.std()*np.sqrt(ann_factor_opt)*100, 2), "Max DD %": round(((s-s.cummax())/s.cummax()).min()*100, 2)})
+            
+            c1, c2 = st.columns([2, 1])
+            with c1: st.plotly_chart(equity_line_chart((df/df.iloc[0])*100, "Performance Storica"), use_container_width=True)
+            with c2: st.dataframe(pd.DataFrame(metrics).set_index("Ticker"), height=400)
+            
+            st.markdown("#### Dati Storici Grezzi")
+            st.dataframe(df.sort_index(ascending=False).round(2), use_container_width=True, height=300)
+            df_export = df.copy()
+            df_export.index.name = "Data"
+            csv = df_export.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
+            st.download_button(label="📥 SCARICA CSV DATI", data=csv, file_name="serie_storiche.csv", mime="text/csv")
+            
+            fig, ax = plt.subplots(figsize=(4, 2.5))
+            sns.heatmap(df.pct_change().corr(), annot=True, cmap="RdYlGn", fmt=".2f", ax=ax, annot_kws={"size": 7})
+            ax.tick_params(labelsize=7)
+            col_spacer_l, col_chart, col_spacer_r = st.columns([1.5, 2, 1.5]) 
+            with col_chart:
+                st.pyplot(fig)
+
+        # TAB 2: MARKOWITZ
+        with tab2:
+            st.markdown('<div class="section-header">Mean-Variance Optimization</div>', unsafe_allow_html=True)
+            w_mk = get_optimal_weights(mu_strat, sigma_strat, min_weight, max_weight, rf)
+            if w_mk is None: w_mk = np.array([1.0/len(all_assets)]*len(all_assets))
+            m_mk = portfolio_metrics(w_mk, mu_strat, sigma_strat, rf)
+            kpi_row([
+                {"label": "Rendimento Atteso", "value": f"{m_mk['return']*100:.2f}%", "positive": m_mk['return']>0},
+                {"label": "Volatilità Attesa", "value": f"{m_mk['volatility']*100:.2f}%"},
+                {"label": "Sharpe Ratio", "value": f"{m_mk['sharpe']:.3f}", "positive": m_mk['sharpe']>1}
+            ])
+            c1, c2 = st.columns(2)
+            with c1: allocation_table(all_assets, w_mk)
+            with c2: st.plotly_chart(pie_chart(all_assets, w_mk, "Markowitz Allocation"))
+
+        # TAB 3: MONTECARLO
+        with tab3:
+            st.markdown('<div class="section-header">Simulazione Montecarlo (10k Scenari)</div>', unsafe_allow_html=True)
+            with st.spinner("Generazione..."):
+                w_mc = get_montecarlo_weights(mu_strat, sigma_strat, min_weight, max_weight, rf, 10000)
+            if w_mc is None: w_mc = np.array([1.0/len(all_assets)]*len(all_assets))
+            m_mc = portfolio_metrics(w_mc, mu_strat, sigma_strat, rf)
+            kpi_row([
+                {"label": "Rendimento Atteso", "value": f"{m_mc['return']*100:.2f}%", "positive": m_mc['return']>0},
+                {"label": "Volatilità Attesa", "value": f"{m_mc['volatility']*100:.2f}%"},
+                {"label": "Sharpe Ratio", "value": f"{m_mc['sharpe']:.3f}", "positive": m_mc['sharpe']>1}
+            ])
+            c1, c2 = st.columns(2)
+            with c1: allocation_table(all_assets, w_mc)
+            with c2: st.plotly_chart(pie_chart(all_assets, w_mc, "Montecarlo Best Sharpe"))
+
+        # TAB 4: ANTIFRAGILE
+        with tab4:
+            st.markdown('<div class="section-header">Min CVaR & Ledoit-Wolf Shrinkage</div>', unsafe_allow_html=True)
+            with st.spinner("Calcolo Matrici Robuste..."):
+                lw = LedoitWolf()
+                sigma_shrunk = lw.fit(returns_wf).covariance_ * ann_factor_opt
+                w_gmv = get_gmv_weights(sigma_shrunk, min_weight, max_weight)
+                w_cvar = get_cvar_weights(returns_wf.values, min_weight, max_weight)
+                
+            if w_gmv is None: w_gmv = np.array([1.0/len(all_assets)]*len(all_assets))
+            if w_cvar is None: w_cvar = np.array([1.0/len(all_assets)]*len(all_assets))
+            m_cvar = portfolio_metrics(w_cvar, mu_strat, sigma_strat, rf)
+            
+            st.markdown("#### Minimizzazione Rischio di Rovina (CVaR - 95%)")
+            kpi_row([
+                {"label": "Rendimento Atteso", "value": f"{m_cvar['return']*100:.2f}%"},
+                {"label": "Volatilità Attesa", "value": f"{m_cvar['volatility']*100:.2f}%"},
+                {"label": "Sharpe Ratio", "value": f"{m_cvar['sharpe']:.3f}"}
+            ])
+            c1, c2 = st.columns(2)
+            with c1: st.markdown("##### Min-CVaR"); allocation_table(all_assets, w_cvar)
+            with c2: st.markdown("##### GMV Shrinkage"); allocation_table(all_assets, w_gmv)
+
+        # TAB 5: BACKTEST
+        with tab5:
+            st.markdown('<div class="section-header">Walk-Forward Backtest</div>', unsafe_allow_html=True)
+            window_size = int(lookback * ann_factor_opt)
+            if len(returns_wf) <= window_size:
+                st.error("Dati insufficienti per il backtest. Abbassa l'orizzonte Rolling.")
+            else:
+                wf_ret_mk, wf_ret_mc, wf_ret_gmv, wf_ret_cvar, wf_dates = [], [], [], [], []
+                w_opt_mk = w_opt_mc = w_opt_gmv = w_opt_cvar = np.array([1.0/len(all_assets)]*len(all_assets))
+                pb = st.progress(0, text="Stress test storico...")
+                steps = len(returns_wf) - window_size
+                
+                for i in range(window_size, len(returns_wf)):
+                    if i % 10 == 0: pb.progress(min((i-window_size)/steps, 1.0))
+                    win = returns_wf.iloc[i-window_size:i]
+                    if win.std().sum() > 0:
+                        mu_win, sig_win = win.mean()*ann_factor_opt, win.cov()*ann_factor_opt
+                        res_mk = get_optimal_weights(mu_win, sig_win, min_weight, max_weight, rf)
+                        if res_mk is not None: w_opt_mk = res_mk
+                        res_mc = get_montecarlo_weights(mu_win, sig_win, min_weight, max_weight, rf, 1000)
+                        if res_mc is not None: w_opt_mc = res_mc
+                        try:
+                            res_gmv = get_gmv_weights(LedoitWolf().fit(win).covariance_*ann_factor_opt, min_weight, max_weight)
+                            if res_gmv is not None: w_opt_gmv = res_gmv
+                        except: pass
+                        res_cvar = get_cvar_weights(win.values, min_weight, max_weight)
+                        if res_cvar is not None: w_opt_cvar = res_cvar
+                        
+                    next_ret = returns_wf.iloc[i].values
+                    wf_ret_mk.append(np.sum(w_opt_mk * next_ret))
+                    wf_ret_mc.append(np.sum(w_opt_mc * next_ret))
+                    wf_ret_gmv.append(np.sum(w_opt_gmv * next_ret))
+                    wf_ret_cvar.append(np.sum(w_opt_cvar * next_ret))
+                    wf_dates.append(returns_wf.index[i])
+                    
+                pb.empty()
+                df_wf = pd.DataFrame({"Markowitz": wf_ret_mk, "Montecarlo": wf_ret_mc, "GMV Shrinkage": wf_ret_gmv, "Min CVaR": wf_ret_cvar}, index=wf_dates)
+                nav = compute_nav(df_wf)
+                c1, c2 = st.columns(2)
+                with c1: st.plotly_chart(equity_line_chart(nav, "Backtest"), use_container_width=True)
+                with c2: st.plotly_chart(drawdown_chart(nav, "Drawdown"), use_container_width=True)
+                
+                st.markdown("#### Analisi Strategica del Backtest")
+                
+                mdd_assets = ((df_res - df_res.cummax()) / df_res.cummax()).min() * 100
+                mdd_ports = ((nav - nav.cummax()) / nav.cummax()).min() * 100
+                
+                mdd_df = pd.DataFrame({
+                    "Nome": list(mdd_assets.index) + list(mdd_ports.index),
+                    "Tipologia": ["Asset Singolo"] * len(mdd_assets) + ["Portafoglio Simulato"] * len(mdd_ports),
+                    "Max Drawdown (%)": list(mdd_assets.values) + list(mdd_ports.values)
+                }).sort_values("Max Drawdown (%)")
+                
+                st.table(mdd_df.style.format({"Max Drawdown (%)": "{:.2f}%"}))
+                
+                st.markdown("Questo backtest mostra la simulazione storica, ma ti stai illudendo se pensi che questi siano i rendimenti che otterrai. Il modello esegue ribilanciamenti continui assumendo liquidità infinita, zero slippage e zero costi di transazione. Se il Drawdown dei portafogli rompe la tua soglia psicologica o non giustifica il rischio rispetto alla caduta libera degli asset singoli (vedi tabella sopra), il tuo modello teorico ha fallito. Smetti di guardare il rendimento assoluto e fissa questi numeri negativi: sono il prezzo che pagherai nei periodi di panico.")
+
+                # ==========================================
+                # INIZIO SEZIONE CUSTOM (PATCH MULTI-ISIN)
+                # ==========================================
+                st.markdown("---")
+                st.markdown("#### 🛠️ Comparazione Portafoglio Custom / Benchmark")
+                custom_mode = st.radio("Metodo di inserimento:", ["Modifica Pesi Manuali", "Benchmark Esterno (Ticker/ISIN)"], horizontal=True)
+                
+                custom_nav = None
+                custom_name = "Custom"
+                
+                if custom_mode == "Modifica Pesi Manuali":
+                    st.markdown("Definisci i pesi statici per gli asset attuali (verranno normalizzati a 100% se non combaciano):")
+                    custom_weights = []
+                    cols = st.columns(min(len(all_assets), 4))
+                    for idx, asset in enumerate(all_assets):
+                        with cols[idx % len(cols)]:
+                            w = st.number_input(f"{asset} %", min_value=0.0, max_value=100.0, value=100.0/len(all_assets), step=1.0, key=f"w_{asset}")
+                            custom_weights.append(w)
+                            
+                    if st.button("Esegui Backtest Custom (Pesi)", use_container_width=True):
+                        w_array = np.array(custom_weights)
+                        if w_array.sum() > 0: w_array = w_array / w_array.sum()
+                        
+                        # Calcolo ritorni sul periodo walk-forward
+                        custom_ret = returns_wf.loc[df_wf.index].dot(w_array)
+                        custom_nav = (1 + custom_ret).cumprod() * 100
+                        custom_name = "Custom (Pesi Statici)"
+                        
+                else:
+                    custom_ticker_raw = st.text_input("Inserisci Ticker o ISIN separati da spazio (es. SWDA.MI EIMI.MI)")
+                    if st.button("Esegui Backtest Custom (Ticker/ISIN)", use_container_width=True):
+                        if custom_ticker_raw:
+                            parsed_tickers = [ALIAS_MAP.get(t, t) for t in re.findall(r"[\w\.\-\^\=]+", custom_ticker_raw.upper())]
+                            if parsed_tickers:
+                                with st.spinner(f"Scaricamento dati per {len(parsed_tickers)} asset..."):
+                                    # Uso 20 anni per coprire sicuramente il backtest
+                                    df_bench = fetch_historical_data(parsed_tickers, 20, freq_str)
+                                    if df_bench is not None and not df_bench.empty:
+                                        bench_ret = df_bench.pct_change().dropna()
+                                        common_dates = bench_ret.index.intersection(df_wf.index)
+                                        if len(common_dates) > 0:
+                                            # Costruzione automatica EW per permettere la vista unificata
+                                            ew_weights = np.array([1.0 / len(df_bench.columns)] * len(df_bench.columns))
+                                            custom_ret = bench_ret.loc[common_dates].dot(ew_weights)
+                                            custom_nav = (1 + custom_ret).cumprod() * 100
+                                            
+                                            if len(parsed_tickers) == 1:
+                                                custom_name = f"Benchmark ({parsed_tickers[0]})"
+                                            else:
+                                                custom_name = f"Benchmark Custom EW ({len(parsed_tickers)} Asset)"
+                                                
+                                            nav = nav.loc[common_dates] # Riallinea il nav base per correttezza del grafico
+                                        else:
+                                            st.error("Nessuna data in comune tra il benchmark e il periodo di backtest.")
+                                    else:
+                                        st.error("Impossibile scaricare i dati per i Ticker inseriti.")
+                            else:
+                                st.error("Ticker non validi o formato non riconosciuto.")
+                
+                if custom_nav is not None:
+                    fig_custom = _base_fig(title=dict(text="Backtest Comparativo: Modelli Dinamici vs Custom Line", x=0))
+                    for col in nav.columns:
+                        fig_custom.add_trace(go.Scatter(x=nav.index, y=nav[col], name=col, mode="lines", opacity=0.5))
+                    
+                    fig_custom.add_trace(go.Scatter(x=custom_nav.index, y=custom_nav.values, name=custom_name, mode="lines", line=dict(color='red', width=3)))
+                    fig_custom.update_layout(yaxis_title="NAV (Base 100)", hovermode="x unified")
+                    st.plotly_chart(fig_custom, use_container_width=True)
+                # ==========================================
+                # FINE SEZIONE CUSTOM
+                # ==========================================
+
+        # TAB 6: PROIEZIONE
+        with tab6:
+            st.markdown('<div class="section-header">Cono di Probabilità (GBM)</div>', unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            anni_futuri = c1.slider("Anni Proiezione", 1, 10, 5)
+            n_sim = c2.selectbox("Scenari Paralleli", [1000, 5000])
+            
+            with st.spinner("Calcolo traiettorie quantistiche..."):
+                w_proj = w_cvar if 'w_cvar' in locals() else np.array([1.0/len(all_assets)]*len(all_assets))
+                cov_proj = sigma_shrunk if 'sigma_shrunk' in locals() else sigma_strat
+                p_mu = float(np.sum(mu_strat * w_proj))
+                p_vol = float(np.sqrt(np.dot(w_proj.T, np.dot(cov_proj, w_proj))))
+                
+                giorni = 252 * anni_futuri
+                dt = 1/252
+                sim = np.zeros((giorni+1, n_sim))
+                sim[0] = 100.0
+                Z = np.random.standard_normal((giorni, n_sim))
+                sim[1:] = np.exp((p_mu - 0.5*p_vol**2)*dt + p_vol*np.sqrt(dt)*Z)
+                sim = np.cumprod(sim, axis=0)
+                perc = np.percentile(sim, [5, 25, 50, 75, 95], axis=1)
+                
+                fig = _base_fig(title=dict(text="Cono Incertezza Pesi CVaR", x=0))
+                dates = pd.date_range(start=pd.Timestamp.today(), periods=giorni+1, freq='B')
+                fig.add_trace(go.Scatter(x=dates, y=perc[4], mode='lines', line=dict(width=0), showlegend=False))
+                fig.add_trace(go.Scatter(x=dates, y=perc[0], mode='lines', fill='tonexty', fillcolor=_hex_to_rgba(COLOR_HIGHLIGHT, 0.1), name='Banda 5-95%'))
+                fig.add_trace(go.Scatter(x=dates, y=perc[2], mode='lines', line=dict(color=COLOR_HIGHLIGHT, width=3), name='Mediana (P50)'))
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("#### Analisi Strategica della Proiezione")
+                st.markdown(f"**Prospettive a {anni_futuri} anni (Capitale Iniziale: 100):**")
+                st.markdown(f"- **Scenario Pessimistico (5% probabilità):** Il capitale crolla a **{perc[0][-1]:.2f}** (CAGR: **{((perc[0][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                st.markdown(f"- **Scenario Mediano (50% probabilità):** Il capitale arriva a **{perc[2][-1]:.2f}** (CAGR: **{((perc[2][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                st.markdown(f"- **Scenario Ottimistico (95% probabilità):** Il capitale arriva a **{perc[4][-1]:.2f}** (CAGR: **{((perc[4][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                
+                st.markdown("Stai guardando un cono generato da un Moto Browniano Geometrico, un modello che assume ingenuamente che la volatilità futura sarà identica a quella passata. La linea mediana e le stime ottimistiche sono puro rumore statistico. Il tuo vero focus deve essere la **banda inferiore (5%)**. Se quella linea scende al di sotto del tuo capitale di sopravvivenza, la tua allocazione attuale ha un rischio di rovina matematica inaccettabile. Non usare questa proiezione per sognare profitti, usala per quantificare i tuoi rischi peggiori.")
+
+        # TAB 7: LIVE
+        with tab7:
+            st.markdown('<div class="section-header">Live Market Widgets</div>', unsafe_allow_html=True)
+            c1, c2 = st.columns([2,1])
+            with c1: components.html('<iframe src="https://sslecal2.investing.com?ecoDayBackground=%23FFFFFF&defaultFont=%231A202C&borderColor=%23E2E8F0&columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&features=datepicker,timezone&countries=25,32,6,37,72,22,17,39,14,10,35,43,56,36,110,11,26,12,4,5&calType=week&timeZone=8&lang=1" width="650" height="467" frameborder="0"></iframe>', height=500)
+            with c2: components.html('<iframe src="https://ssltsw.investing.com?lang=1&forex=1,2,3,5,7,9,10&commodities=8830,8836,8831,8849,8833,8862,8832&indices=175,166,172,27,179,170,174&stocks=345,346,347,348,349,350,352&tabs=1,2,3,4" width="317" height="467"></iframe>', height=500)
+
+elif page == "Allocazione a 3":
+    st.title("🛡️ Quant Allocation: 3-Tier Model")
+    df = st.session_state.shared_df
+    assets = st.session_state.shared_assets
+    freq_str = st.session_state.shared_freq
+    ann_factor = 252 if freq_str == "Giornaliero" else 52 if freq_str == "Settimanale" else 12
+
+    c1, c2 = st.columns(2)
+    max_corr = c1.slider("Max Correlazione Ammessa", 0.0, 1.0, 1.0)
+    min_w = c2.slider("Peso Minimo Combinatorio (%)", 0, 33, 10)/100.0
+
+    temp_sharpes = {a: get_advanced_stats_3([1], df[[a]].pct_change().dropna(), ann_factor)[2] for a in assets}
+    best_single = max(temp_sharpes, key=temp_sharpes.get)
+    try: default_idx = assets.index(best_single)
+    except: default_idx = 0
+    
+    manual_asset = st.selectbox("Linea 1 (Asset Manuale)", assets, index=default_idx)
+
+    with st.spinner('Calcolo Ottimizzazione Combinatoria (Forza Bruta)...'):
+        l1_ret_frame = df[[manual_asset]].pct_change().dropna()
+        l1_stats = get_advanced_stats_3([1], l1_ret_frame, ann_factor)
+        
+        forced_min_w = max(min_w, 0.01)
+        p_assets, p_w, p_stats = find_best_optimized_combination_3(df, 2, ann_factor, max_corr, forced_min_w)
+        t_assets, t_w, t_stats = find_best_optimized_combination_3(df, 3, ann_factor, max_corr, forced_min_w)
+
+    st.subheader("Performance Tier")
+    table_data = []
+    def make_row(label, a_list, w_list, stats):
+        if stats is None: return None
+        r, v, s, sort, mdd = stats
+        comp = f"{clean_asset_name_3(a_list)} (100%)" if isinstance(a_list, str) else " + ".join([f"{clean_asset_name_3(a)} ({w*100:.0f}%)" for a, w in zip(a_list, w_list) if w > 0.001])
+        return {"Strategia": label, "Allocazione": comp, "Sharpe": f"{s:.2f}", "Rend": f"{r*100:.1f}%", "Max DD": f"{mdd*100:.1f}%"}
+        
+    r1 = make_row("L1 (Manuale)", manual_asset, [1], l1_stats)
+    if r1: table_data.append(r1)
+    r2 = make_row("L2 (Best Pair)", p_assets, p_w, p_stats)
+    if r2: table_data.append(r2)
+    r3 = make_row("L3 (Best Triplet)", t_assets, t_w, t_stats)
+    if r3: table_data.append(r3)
+    
+    if table_data: 
+        st.table(pd.DataFrame(table_data))
+        
+        st.markdown("#### Visualizzazione Allocazioni")
+        c_pie1, c_pie2, c_pie3 = st.columns(3)
+        with c_pie1:
+            if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
+        with c_pie2:
+            if r2 and p_assets: st.plotly_chart(pie_chart(list(p_assets), p_w, "Linea 2"), use_container_width=True)
+        with c_pie3:
+            if r3 and t_assets: st.plotly_chart(pie_chart(list(t_assets), t_w, "Linea 3"), use_container_width=True)
+            
+        st.markdown("#### Simulazione Storica Comparativa")
+        common_idx = l1_ret_frame.index
+        l2_series, l3_series = None, None
+        if p_assets: 
+            l2_series = df[list(p_assets)].pct_change().dropna().dot(p_w)
+            common_idx = common_idx.intersection(l2_series.index)
+        if t_assets: 
+            l3_series = df[list(t_assets)].pct_change().dropna().dot(t_w)
+            common_idx = common_idx.intersection(l3_series.index)
+            
+        chart_df = pd.DataFrame(index=common_idx)
+        chart_df[f"L1: {clean_asset_name_3(manual_asset)}"] = (1 + l1_ret_frame.loc[common_idx][manual_asset]).cumprod() * 100
+        if p_assets and l2_series is not None: chart_df["L2: Best Pair"] = (1 + l2_series.loc[common_idx]).cumprod() * 100
+        if t_assets and l3_series is not None: chart_df["L3: Best Triplet"] = (1 + l3_series.loc[common_idx]).cumprod() * 100
+        
+        fig_comp = px.line(chart_df, x=chart_df.index, y=chart_df.columns, template='plotly_white')
+        fig_comp.update_layout(yaxis_title="Valore (Base 100)", legend=dict(orientation="h", y=1.1, title=None))
+        st.plotly_chart(fig_comp, use_container_width=True)
+    else: 
+        st.warning("Nessuna combinazione soddisfa i criteri.")
