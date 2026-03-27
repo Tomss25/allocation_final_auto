@@ -1,7 +1,7 @@
 """
 Unified Quantitative Allocation Platform
 Architettura integrata: Motore Dati Condiviso + Multi-Model Routing
-(Include Patch di Sanitizzazione Dati CSV e Forzatura Datetime)
+(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime e Merton Jump-Diffusion)
 """
 
 import streamlit as st
@@ -134,12 +134,7 @@ def pie_chart(labels, values, title="Asset Allocation") -> go.Figure:
     total = sum(values) if sum(values) > 0 else 1
     legend_labels = [f"{l} ({(v/total)*100:.1f}%)" for l, v in zip(labels, values)]
     fig = go.Figure(go.Pie(labels=legend_labels, values=values, hole=0.52, textinfo="none"))
-    # Patch applicata: Legenda spostata in basso e margini ridotti per massimizzare il cerchio
-    fig.update_layout(
-        **{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)},
-        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5),
-        margin=dict(t=50, b=20, l=10, r=10)
-    )
+    fig.update_layout(**{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)})
     return fig
 
 def equity_line_chart(nav_df: pd.DataFrame, title="Equity Line Comparativa (Base 100)") -> go.Figure:
@@ -396,9 +391,9 @@ if page == "Nota Metodologica":
     * **Motore Auto (Markowitz & CVaR):** Implementa l'ottimizzazione Media-Varianza classica (SLSQP). Per mitigare la fragilità statistica di Markowitz, il modulo integra l'ottimizzazione **Min-CVaR (Expected Shortfall a coda 5%)**, spostando il focus dal rischio simmetrico al Tail Risk puro. Include stress test via simulazione di Montecarlo e backtest Walk-Forward.
     * **Motore a 3-Tier:** Esplora a forza bruta il subspazio di tutte le combinazioni possibili di $k \in \{1, 2, 3\}$ asset, applicando l'ottimizzatore sui subset filtrati tramite matrici di correlazione massima.
 
-    ### 3. Assunzioni Statistiche
+    ### 3. Assunzioni Statistiche Modificate
     * **Stazionarietà:** I modelli classici assumono implicitamente che i rendimenti passati siano stimatori non distorti del futuro.
-    * **Distribuzione:** La varianza assume normalità dei rendimenti, assioma fallace. Il modulo CVaR e le proiezioni stocastiche rilassano questa assunzione.
+    * **Simulazione Stocastica Avanzata:** Il modulo di Proiezione Futura non utilizza più un banale Moto Browniano Geometrico (Gaussiano), ma implementa una simulazione **Merton Jump-Diffusion (MJD)**. Questo approccio inietta un processo di Poisson che genera shock di mercato improvvisi e violenti (-8% medio), permettendo di stressare in avanti i portafogli e validare l'effettiva resilienza dei modelli costruiti per difendere dalle code grasse (come il Min-CVaR).
 
     ### 4. Limiti del Modello e Rischi (Overfitting)
     Il framework è profondamente esposto al rischio di **Curve-Fitting**. In particolare, il Motore a 3-Tier agisce come un selettore ex-post: estraendo la combinazione storica ottimale, tende a sovrastimare massicciamente le performance out-of-sample.
@@ -432,6 +427,29 @@ elif page == "Allocazione Auto":
     else:
         df_res, returns_wf, ann_factor_opt = meta
         
+        # Generiamo preventivamente le liste pesi (con fallback) per renderle accessibili globalmente in tutte le tab
+        try: w_mk_base = get_optimal_weights(mu_strat, sigma_strat, min_weight, max_weight, rf)
+        except: w_mk_base = None
+        if w_mk_base is None: w_mk_base = np.array([1.0/len(all_assets)]*len(all_assets))
+
+        try: w_mc_base = get_montecarlo_weights(mu_strat, sigma_strat, min_weight, max_weight, rf, 10000)
+        except: w_mc_base = None
+        if w_mc_base is None: w_mc_base = np.array([1.0/len(all_assets)]*len(all_assets))
+
+        try:
+            lw_tmp = LedoitWolf()
+            sigma_shrunk_base = lw_tmp.fit(returns_wf).covariance_ * ann_factor_opt
+            w_gmv_base = get_gmv_weights(sigma_shrunk_base, min_weight, max_weight)
+        except:
+            sigma_shrunk_base = sigma_strat
+            w_gmv_base = np.array([1.0/len(all_assets)]*len(all_assets))
+        if w_gmv_base is None: w_gmv_base = np.array([1.0/len(all_assets)]*len(all_assets))
+
+        try: w_cvar_base = get_cvar_weights(returns_wf.values, min_weight, max_weight)
+        except: w_cvar_base = None
+        if w_cvar_base is None: w_cvar_base = np.array([1.0/len(all_assets)]*len(all_assets))
+
+
         # TAB 1: SERIE STORICHE
         with tab1:
             st.markdown('<div class="section-header">Analisi Serie Storiche</div>', unsafe_allow_html=True)
@@ -462,46 +480,33 @@ elif page == "Allocazione Auto":
         # TAB 2: MARKOWITZ
         with tab2:
             st.markdown('<div class="section-header">Mean-Variance Optimization</div>', unsafe_allow_html=True)
-            w_mk = get_optimal_weights(mu_strat, sigma_strat, min_weight, max_weight, rf)
-            if w_mk is None: w_mk = np.array([1.0/len(all_assets)]*len(all_assets))
-            m_mk = portfolio_metrics(w_mk, mu_strat, sigma_strat, rf)
+            m_mk = portfolio_metrics(w_mk_base, mu_strat, sigma_strat, rf)
             kpi_row([
                 {"label": "Rendimento Atteso", "value": f"{m_mk['return']*100:.2f}%", "positive": m_mk['return']>0},
                 {"label": "Volatilità Attesa", "value": f"{m_mk['volatility']*100:.2f}%"},
                 {"label": "Sharpe Ratio", "value": f"{m_mk['sharpe']:.3f}", "positive": m_mk['sharpe']>1}
             ])
             c1, c2 = st.columns(2)
-            with c1: allocation_table(all_assets, w_mk)
-            with c2: st.plotly_chart(pie_chart(all_assets, w_mk, "Markowitz Allocation"))
+            with c1: allocation_table(all_assets, w_mk_base)
+            with c2: st.plotly_chart(pie_chart(all_assets, w_mk_base, "Markowitz Allocation"))
 
         # TAB 3: MONTECARLO
         with tab3:
             st.markdown('<div class="section-header">Simulazione Montecarlo (10k Scenari)</div>', unsafe_allow_html=True)
-            with st.spinner("Generazione..."):
-                w_mc = get_montecarlo_weights(mu_strat, sigma_strat, min_weight, max_weight, rf, 10000)
-            if w_mc is None: w_mc = np.array([1.0/len(all_assets)]*len(all_assets))
-            m_mc = portfolio_metrics(w_mc, mu_strat, sigma_strat, rf)
+            m_mc = portfolio_metrics(w_mc_base, mu_strat, sigma_strat, rf)
             kpi_row([
                 {"label": "Rendimento Atteso", "value": f"{m_mc['return']*100:.2f}%", "positive": m_mc['return']>0},
                 {"label": "Volatilità Attesa", "value": f"{m_mc['volatility']*100:.2f}%"},
                 {"label": "Sharpe Ratio", "value": f"{m_mc['sharpe']:.3f}", "positive": m_mc['sharpe']>1}
             ])
             c1, c2 = st.columns(2)
-            with c1: allocation_table(all_assets, w_mc)
-            with c2: st.plotly_chart(pie_chart(all_assets, w_mc, "Montecarlo Best Sharpe"))
+            with c1: allocation_table(all_assets, w_mc_base)
+            with c2: st.plotly_chart(pie_chart(all_assets, w_mc_base, "Montecarlo Best Sharpe"))
 
         # TAB 4: ANTIFRAGILE
         with tab4:
             st.markdown('<div class="section-header">Min CVaR & Ledoit-Wolf Shrinkage</div>', unsafe_allow_html=True)
-            with st.spinner("Calcolo Matrici Robuste..."):
-                lw = LedoitWolf()
-                sigma_shrunk = lw.fit(returns_wf).covariance_ * ann_factor_opt
-                w_gmv = get_gmv_weights(sigma_shrunk, min_weight, max_weight)
-                w_cvar = get_cvar_weights(returns_wf.values, min_weight, max_weight)
-                
-            if w_gmv is None: w_gmv = np.array([1.0/len(all_assets)]*len(all_assets))
-            if w_cvar is None: w_cvar = np.array([1.0/len(all_assets)]*len(all_assets))
-            m_cvar = portfolio_metrics(w_cvar, mu_strat, sigma_strat, rf)
+            m_cvar = portfolio_metrics(w_cvar_base, mu_strat, sigma_strat, rf)
             
             st.markdown("#### Minimizzazione Rischio di Rovina (CVaR - 95%)")
             kpi_row([
@@ -510,8 +515,8 @@ elif page == "Allocazione Auto":
                 {"label": "Sharpe Ratio", "value": f"{m_cvar['sharpe']:.3f}"}
             ])
             c1, c2 = st.columns(2)
-            with c1: st.markdown("##### Min-CVaR"); allocation_table(all_assets, w_cvar)
-            with c2: st.markdown("##### GMV Shrinkage"); allocation_table(all_assets, w_gmv)
+            with c1: st.markdown("##### Min-CVaR"); allocation_table(all_assets, w_cvar_base)
+            with c2: st.markdown("##### GMV Shrinkage"); allocation_table(all_assets, w_gmv_base)
 
         # TAB 5: BACKTEST
         with tab5:
@@ -632,42 +637,70 @@ elif page == "Allocazione Auto":
                     fig_custom.update_layout(yaxis_title="NAV (Base 100)", hovermode="x unified")
                     st.plotly_chart(fig_custom, use_container_width=True)
 
-        # TAB 6: PROIEZIONE
+        # TAB 6: PROIEZIONE CON JUMP DIFFUSION
         with tab6:
-            st.markdown('<div class="section-header">Cono di Probabilità (GBM)</div>', unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            anni_futuri = c1.slider("Anni Proiezione", 1, 10, 5)
-            n_sim = c2.selectbox("Scenari Paralleli", [1000, 5000])
+            st.markdown('<div class="section-header">Cono di Probabilità (Merton Jump-Diffusion)</div>', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
             
-            with st.spinner("Calcolo traiettorie quantistiche..."):
-                w_proj = w_cvar if 'w_cvar' in locals() else np.array([1.0/len(all_assets)]*len(all_assets))
-                cov_proj = sigma_shrunk if 'sigma_shrunk' in locals() else sigma_strat
+            # NUOVO SELETTORE MODELLO (come richiesto)
+            proj_strategy = c1.selectbox("Modello da proiettare", ["Min CVaR", "Markowitz", "Montecarlo Best Sharpe", "GMV Shrinkage", "Equal Weight (Fallback)"])
+            anni_futuri = c2.slider("Anni Proiezione", 1, 10, 5)
+            n_sim = c3.selectbox("Scenari Paralleli", [1000, 5000])
+            
+            with st.spinner(f"Calcolo traiettorie stocastiche con Code Grasse per {proj_strategy}..."):
+                
+                # Routing logica dei pesi
+                if proj_strategy == "Min CVaR": w_proj = w_cvar_base
+                elif proj_strategy == "Markowitz": w_proj = w_mk_base
+                elif proj_strategy == "Montecarlo Best Sharpe": w_proj = w_mc_base
+                elif proj_strategy == "GMV Shrinkage": w_proj = w_gmv_base
+                else: w_proj = np.array([1.0/len(all_assets)]*len(all_assets))
+                
+                cov_proj = sigma_shrunk_base if proj_strategy in ["Min CVaR", "GMV Shrinkage"] else sigma_strat
                 p_mu = float(np.sum(mu_strat * w_proj))
                 p_vol = float(np.sqrt(np.dot(w_proj.T, np.dot(cov_proj, w_proj))))
                 
                 giorni = 252 * anni_futuri
                 dt = 1/252
+                
+                # MATEMATICA: Merton Jump-Diffusion Parameters
+                lambda_j = 1.5   # In media 1.5 shock violenti all'anno
+                mu_j = -0.08     # Lo shock medio è un crollo dell'8%
+                sigma_j = 0.05   # Volatilità dello shock
+                
+                k = np.exp(mu_j + 0.5 * sigma_j**2) - 1
+                drift = (p_mu - 0.5 * p_vol**2 - lambda_j * k) * dt
+                
                 sim = np.zeros((giorni+1, n_sim))
                 sim[0] = 100.0
+                
+                # Componente Gaussiana Standard
                 Z = np.random.standard_normal((giorni, n_sim))
-                sim[1:] = np.exp((p_mu - 0.5*p_vol**2)*dt + p_vol*np.sqrt(dt)*Z)
+                diffusion = p_vol * np.sqrt(dt) * Z
+                
+                # Componente Poissoniana (Eventi Estremi/Cigni Neri)
+                N = np.random.poisson(lambda_j * dt, (giorni, n_sim))
+                J = N * np.random.normal(mu_j, sigma_j, (giorni, n_sim))
+                
+                # Generazione dei ritorni proiettati
+                sim[1:] = np.exp(drift + diffusion + J)
                 sim = np.cumprod(sim, axis=0)
                 perc = np.percentile(sim, [5, 25, 50, 75, 95], axis=1)
                 
-                fig = _base_fig(title=dict(text="Cono Incertezza Pesi CVaR", x=0))
+                fig = _base_fig(title=dict(text=f"Cono Incertezza con Tail Risk (Pesi: {proj_strategy})", x=0))
                 dates = pd.date_range(start=pd.Timestamp.today(), periods=giorni+1, freq='B')
                 fig.add_trace(go.Scatter(x=dates, y=perc[4], mode='lines', line=dict(width=0), showlegend=False))
                 fig.add_trace(go.Scatter(x=dates, y=perc[0], mode='lines', fill='tonexty', fillcolor=_hex_to_rgba(COLOR_HIGHLIGHT, 0.1), name='Banda 5-95%'))
                 fig.add_trace(go.Scatter(x=dates, y=perc[2], mode='lines', line=dict(color=COLOR_HIGHLIGHT, width=3), name='Mediana (P50)'))
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.markdown("#### Analisi Strategica della Proiezione")
-                st.markdown(f"**Prospettive a {anni_futuri} anni (Capitale Iniziale: 100):**")
+                st.markdown("#### Analisi Strategica della Proiezione (con Stress Test)")
+                st.markdown(f"**Prospettive a {anni_futuri} anni per [{proj_strategy}] (Capitale Iniziale: 100):**")
                 st.markdown(f"- **Scenario Pessimistico (5% probabilità):** Il capitale crolla a **{perc[0][-1]:.2f}** (CAGR: **{((perc[0][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
                 st.markdown(f"- **Scenario Mediano (50% probabilità):** Il capitale arriva a **{perc[2][-1]:.2f}** (CAGR: **{((perc[2][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
                 st.markdown(f"- **Scenario Ottimistico (95% probabilità):** Il capitale arriva a **{perc[4][-1]:.2f}** (CAGR: **{((perc[4][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
                 
-                st.markdown("Stai guardando un cono generato da un Moto Browniano Geometrico, un modello che assume ingenuamente che la volatilità futura sarà identica a quella passata. La linea mediana e le stime ottimistiche sono puro rumore statistico. Il tuo vero focus deve essere la **banda inferiore (5%)**. Se quella linea scende al di sotto del tuo capitale di sopravvivenza, la tua allocazione attuale ha un rischio di rovina matematica inaccettabile. Non usare questa proiezione per sognare profitti, usala per quantificare i tuoi rischi peggiori.")
+                st.markdown("A differenza delle normali proiezioni, questo cono integra un modello **Merton Jump-Diffusion**. Significa che la matematica che vedi incorpora volontariamente dei crolli estremi improvvisi. Se lo Scenario Pessimistico (Banda 5%) distrugge troppo capitale, la strategia selezionata non è in grado di sopravvivere ai cigni neri. Regola i tuoi rischi.")
 
         # TAB 7: LIVE
         with tab7:
@@ -722,6 +755,7 @@ elif page == "Allocazione a 3":
         
         st.markdown("#### Visualizzazione Allocazioni")
         
+        # PATCH APPLICATA: Ripristino delle 3 colonne come richiesto (affiancati)
         c_pie1, c_pie2, c_pie3 = st.columns(3)
         with c_pie1:
             if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
