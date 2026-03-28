@@ -1,7 +1,7 @@
 """
 Unified Quantitative Allocation Platform
 Architettura integrata: Motore Dati Condiviso + Multi-Model Routing
-(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime, MJD, Monkeypatch Signal e Alert Ticker)
+(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime, MJD, Monkeypatch Signal, Alert Ticker, Allineamento Benchmark e Form Input)
 """
 
 import streamlit as st
@@ -598,14 +598,17 @@ elif page == "Allocazione Auto":
                 
                 if custom_mode == "Modifica Pesi Manuali":
                     st.markdown("Definisci i pesi statici per gli asset attuali (verranno normalizzati a 100% se non combaciano):")
-                    custom_weights = []
-                    cols = st.columns(min(len(all_assets), 4))
-                    for idx, asset in enumerate(all_assets):
-                        with cols[idx % len(cols)]:
-                            w = st.number_input(f"{asset} %", min_value=0.0, max_value=100.0, value=100.0/len(all_assets), step=1.0, key=f"w_{asset}")
-                            custom_weights.append(w)
-                            
-                    if st.button("Esegui Backtest Custom (Pesi)", use_container_width=True):
+                    with st.form(key="custom_weights_form"):
+                        custom_weights = []
+                        cols = st.columns(min(len(all_assets), 4))
+                        for idx, asset in enumerate(all_assets):
+                            with cols[idx % len(cols)]:
+                                w = st.number_input(f"{asset} %", min_value=0.0, max_value=100.0, value=100.0/len(all_assets), step=1.0, key=f"w_{asset}")
+                                custom_weights.append(w)
+                                
+                        submit_weights = st.form_submit_button("Esegui Backtest Custom (Pesi)", use_container_width=True)
+                        
+                    if submit_weights:
                         w_array = np.array(custom_weights)
                         if w_array.sum() > 0: w_array = w_array / w_array.sum()
                         
@@ -620,13 +623,18 @@ elif page == "Allocazione Auto":
                             parsed_tickers = [ALIAS_MAP.get(t, t) for t in re.findall(r"[\w\.\-\^\=]+", custom_ticker_raw.upper())]
                             if parsed_tickers:
                                 with st.spinner(f"Scaricamento dati per {len(parsed_tickers)} asset..."):
-                                    df_bench = fetch_historical_data(parsed_tickers, 20, freq_str)
+                                    df_bench = fetch_historical_data(parsed_tickers, 20, "Giornaliero")
                                     if df_bench is not None and not df_bench.empty:
-                                        bench_ret = df_bench.pct_change().dropna()
-                                        common_dates = bench_ret.index.intersection(df_wf.index)
-                                        if len(common_dates) > 0:
-                                            ew_weights = np.array([1.0 / len(df_bench.columns)] * len(df_bench.columns))
-                                            custom_ret = bench_ret.loc[common_dates].dot(ew_weights)
+                                        if df_bench.index.tz is not None:
+                                            df_bench.index = df_bench.index.tz_localize(None)
+                                            
+                                        df_bench_aligned = df_bench.reindex(df_wf.index, method='ffill').dropna()
+                                        
+                                        if not df_bench_aligned.empty:
+                                            bench_ret = df_bench_aligned.pct_change().dropna()
+                                            
+                                            ew_weights = np.array([1.0 / len(bench_ret.columns)] * len(bench_ret.columns))
+                                            custom_ret = bench_ret.dot(ew_weights)
                                             custom_nav = (1 + custom_ret).cumprod() * 100
                                             
                                             if len(parsed_tickers) == 1:
@@ -634,9 +642,9 @@ elif page == "Allocazione Auto":
                                             else:
                                                 custom_name = f"Benchmark Custom EW ({len(parsed_tickers)} Asset)"
                                                 
-                                            nav = nav.loc[common_dates] 
+                                            nav = nav.loc[custom_nav.index] 
                                         else:
-                                            st.error("Nessuna data in comune tra il benchmark e il periodo di backtest.")
+                                            st.error("Nessuna data in comune tra il benchmark e il periodo di backtest, anche dopo l'allineamento.")
                                     else:
                                         st.error("Impossibile scaricare i dati per i Ticker inseriti.")
                             else:
