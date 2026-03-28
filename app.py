@@ -703,10 +703,19 @@ elif page == "Allocazione Auto":
                 st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown("#### Analisi Strategica della Proiezione (con Stress Test)")
-                st.markdown(f"**Prospettive a {anni_futuri} anni per [{proj_strategy}] (Capitale Iniziale: 100):**")
-                st.markdown(f"- **Scenario Pessimistico (5% probabilità):** Il capitale crolla a **{perc[0][-1]:.2f}** (CAGR: **{((perc[0][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
-                st.markdown(f"- **Scenario Mediano (50% probabilità):** Il capitale arriva a **{perc[2][-1]:.2f}** (CAGR: **{((perc[2][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
-                st.markdown(f"- **Scenario Ottimistico (95% probabilità):** Il capitale arriva a **{perc[4][-1]:.2f}** (CAGR: **{((perc[4][-1]/100)**(1/anni_futuri)-1)*100:.2f}%**).")
+                
+                val_p05 = f"{perc[0][-1]:.2f}".replace('.', ',')
+                cagr_p05 = f"{((perc[0][-1]/100)**(1/anni_futuri)-1)*100:.2f}".replace('.', ',')
+                
+                val_p50 = f"{perc[2][-1]:.2f}".replace('.', ',')
+                cagr_p50 = f"{((perc[2][-1]/100)**(1/anni_futuri)-1)*100:.2f}".replace('.', ',')
+                
+                val_p95 = f"{perc[4][-1]:.2f}".replace('.', ',')
+                cagr_p95 = f"{((perc[4][-1]/100)**(1/anni_futuri)-1)*100:.2f}".replace('.', ',')
+
+                st.markdown(f"- **Scenario pessimistico (5° percentile):** il valore finale del capitale è pari a **{val_p05}**, corrispondente a un rendimento annuo composto (CAGR) del **{cagr_p05}%**. Ciò implica che nel 5% dei casi peggiori il rendimento risulta uguale o inferiore a tale livello.")
+                st.markdown(f"- **Scenario mediano (50° percentile):** il capitale raggiunge **{val_p50}**, con un CAGR del **{cagr_p50}%**. Questo rappresenta l’esito centrale della distribuzione dei rendimenti.")
+                st.markdown(f"- **Scenario ottimistico (95° percentile):** il capitale si attesta a **{val_p95}**, con un CAGR del **{cagr_p95}%**. Tale valore indica che nel 5% dei casi migliori il rendimento è pari o superiore a questo livello.")
                 
                 st.markdown("A differenza delle normali proiezioni, questo cono integra un modello **Merton Jump-Diffusion**. Significa che la matematica che vedi incorpora volontariamente dei crolli estremi improvvisi. Se lo Scenario Pessimistico (Banda 5%) distrugge troppo capitale, la strategia selezionata non è in grado di sopravvivere ai cigni neri. Regola i tuoi rischi.")
 
