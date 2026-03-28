@@ -358,12 +358,19 @@ with st.sidebar:
     max_weight = st.slider("Peso Massimo Asset", 0.1, 1.0, 0.40, step=0.05)
     rf = st.number_input("Tasso Risk Free (%)", 0.0, 10.0, 3.0, step=0.1) / 100
     
-    if st.button("🚀 GENERA SERIE STORICHE", type="primary", use_container_width=True):
+   if st.button("🚀 GENERA SERIE STORICHE", type="primary", use_container_width=True):
         with st.spinner("Acquisizione Dati in corso..."):
             df_temp = None
+            missing_assets = [] # Inizializziamo il tracciatore dei fallimenti
+            
             if input_type == "API (Ticker/ISIN)" and tickers_input:
                 df_temp = fetch_historical_data(tickers_input, years, timeframe)
                 source_name = "Yahoo/Morningstar"
+                
+                # Intercettazione asset mancanti
+                if df_temp is not None and not df_temp.empty:
+                    missing_assets = list(set(tickers_input) - set(df_temp.columns))
+                    
             elif input_type == "Upload File (CSV/Excel)" and uploaded_file:
                 try:
                     if uploaded_file.name.endswith('.csv'):
@@ -390,8 +397,12 @@ with st.sidebar:
                 st.session_state.shared_freq = timeframe
                 st.session_state.data_source = source_name
                 st.success("✅ Dati Acquisiti e Condivisi in Memoria!")
+                
+                # Se la lista dei mancanti contiene qualcosa, spariamo l'alert
+                if missing_assets:
+                    st.warning(f"⚠️ Asset ignorati (Dati non trovati o storici insufficienti): {', '.join(missing_assets)}")
             else:
-                st.error("❌ Fallimento estrazione dati.")
+                st.error("❌ Fallimento totale estrazione dati. Verifica i Ticker o il file.")
 
 # ==========================================
 # RENDER VIEWS
