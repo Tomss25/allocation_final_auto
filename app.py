@@ -1,7 +1,7 @@
 """
 Unified Quantitative Allocation Platform
 Architettura integrata: Motore Dati Condiviso + Multi-Model Routing
-(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime, MJD e Monkeypatch Signal)
+(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime, MJD, Monkeypatch Signal e Alert Ticker)
 """
 
 import streamlit as st
@@ -11,20 +11,16 @@ import yfinance as yf
 # PATCH MSTARPY: BYPASS THREADING SIGNAL
 # ==========================================
 import signal
-# Salviamo la funzione originale
 _original_signal = signal.signal
-# Creiamo un "manichino" che non fa nulla
 def _mock_signal(signum, handler): return None
 
 try:
-    # Inganniamo Python temporaneamente
     signal.signal = _mock_signal
     import mstarpy
     MSTARPY_AVAILABLE = True
 except Exception:
     MSTARPY_AVAILABLE = False
 finally:
-    # Ripristiniamo le difese del server
     signal.signal = _original_signal
 
 import pandas as pd
@@ -100,19 +96,13 @@ if 'shared_freq' not in st.session_state: st.session_state.shared_freq = "Giorna
 if 'data_source' not in st.session_state: st.session_state.data_source = None
 
 # ==========================================
-# ETL & DATA SANITIZATION (Patch Temporanea)
+# ETL & DATA SANITIZATION
 # ==========================================
 def clean_and_interpolate_dataframe(df):
-    """
-    Individua valori anomali ('undefined'), standardizza il formato numerico
-    e applica interpolazione lineare. (Inquina la volatilità reale).
-    """
     df = df.replace('undefined', np.nan)
-    
     for col in df.columns:
         if df[col].dtype == 'object' or df[col].dtype == 'string':
             df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
-            
     n = len(df)
     for col in df.columns:
         if not pd.api.types.is_numeric_dtype(df[col]): continue
@@ -150,7 +140,11 @@ def pie_chart(labels, values, title="Asset Allocation") -> go.Figure:
     total = sum(values) if sum(values) > 0 else 1
     legend_labels = [f"{l} ({(v/total)*100:.1f}%)" for l, v in zip(labels, values)]
     fig = go.Figure(go.Pie(labels=legend_labels, values=values, hole=0.52, textinfo="none"))
-    fig.update_layout(**{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)})
+    fig.update_layout(
+        **{**PLOTLY_LAYOUT, "title": dict(text=title, x=0.5)},
+        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5),
+        margin=dict(t=50, b=20, l=10, r=10)
+    )
     return fig
 
 def equity_line_chart(nav_df: pd.DataFrame, title="Equity Line Comparativa (Base 100)") -> go.Figure:
@@ -217,7 +211,7 @@ def fetch_historical_data(tickers_input, years, timeframe):
     return None
 
 # ==========================================
-# CORE MATH: ALLOCAZIONE AUTO (Completo)
+# CORE MATH: ALLOCAZIONE AUTO
 # ==========================================
 def prep_data(df, assets, lookback, freq):
     valid_assets = [c for c in assets if c in df.columns]
@@ -358,16 +352,14 @@ with st.sidebar:
     max_weight = st.slider("Peso Massimo Asset", 0.1, 1.0, 0.40, step=0.05)
     rf = st.number_input("Tasso Risk Free (%)", 0.0, 10.0, 3.0, step=0.1) / 100
     
-   if st.button("🚀 GENERA SERIE STORICHE", type="primary", use_container_width=True):
+    if st.button("🚀 GENERA SERIE STORICHE", type="primary", use_container_width=True):
         with st.spinner("Acquisizione Dati in corso..."):
             df_temp = None
-            missing_assets = [] # Inizializziamo il tracciatore dei fallimenti
+            missing_assets = []
             
             if input_type == "API (Ticker/ISIN)" and tickers_input:
                 df_temp = fetch_historical_data(tickers_input, years, timeframe)
                 source_name = "Yahoo/Morningstar"
-                
-                # Intercettazione asset mancanti
                 if df_temp is not None and not df_temp.empty:
                     missing_assets = list(set(tickers_input) - set(df_temp.columns))
                     
@@ -384,7 +376,6 @@ with st.sidebar:
                     
                     df_temp.index = pd.to_datetime(df_temp.index, dayfirst=True, errors='coerce')
                     df_temp = df_temp[df_temp.index.notnull()]
-                    
                     df_temp = clean_and_interpolate_dataframe(df_temp)
                     df_temp = df_temp.select_dtypes(include=[np.number]).dropna()
                     source_name = "Upload CSV/Excel"
@@ -397,10 +388,8 @@ with st.sidebar:
                 st.session_state.shared_freq = timeframe
                 st.session_state.data_source = source_name
                 st.success("✅ Dati Acquisiti e Condivisi in Memoria!")
-                
-                # Se la lista dei mancanti contiene qualcosa, spariamo l'alert
                 if missing_assets:
-                    st.warning(f"⚠️ Asset ignorati (Dati non trovati o storici insufficienti): {', '.join(missing_assets)}")
+                    st.warning(f"⚠️ Asset ignorati (Dati non trovati o insufficienti): {', '.join(missing_assets)}")
             else:
                 st.error("❌ Fallimento totale estrazione dati. Verifica i Ticker o il file.")
 
@@ -474,7 +463,6 @@ elif page == "Allocazione Auto":
         try: w_cvar_base = get_cvar_weights(returns_wf.values, min_weight, max_weight)
         except: w_cvar_base = None
         if w_cvar_base is None: w_cvar_base = np.array([1.0/len(all_assets)]*len(all_assets))
-
 
         # TAB 1: SERIE STORICHE
         with tab1:
