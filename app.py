@@ -1,16 +1,32 @@
 """
 Unified Quantitative Allocation Platform
 Architettura integrata: Motore Dati Condiviso + Multi-Model Routing
-(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime e Merton Jump-Diffusion)
+(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime, MJD e Monkeypatch Signal)
 """
 
 import streamlit as st
 import yfinance as yf
+
+# ==========================================
+# PATCH MSTARPY: BYPASS THREADING SIGNAL
+# ==========================================
+import signal
+# Salviamo la funzione originale
+_original_signal = signal.signal
+# Creiamo un "manichino" che non fa nulla
+def _mock_signal(signum, handler): return None
+
 try:
+    # Inganniamo Python temporaneamente
+    signal.signal = _mock_signal
     import mstarpy
     MSTARPY_AVAILABLE = True
-except ImportError:
+except Exception:
     MSTARPY_AVAILABLE = False
+finally:
+    # Ripristiniamo le difese del server
+    signal.signal = _original_signal
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -427,7 +443,6 @@ elif page == "Allocazione Auto":
     else:
         df_res, returns_wf, ann_factor_opt = meta
         
-        # Generiamo preventivamente le liste pesi (con fallback) per renderle accessibili globalmente in tutte le tab
         try: w_mk_base = get_optimal_weights(mu_strat, sigma_strat, min_weight, max_weight, rf)
         except: w_mk_base = None
         if w_mk_base is None: w_mk_base = np.array([1.0/len(all_assets)]*len(all_assets))
@@ -642,14 +657,12 @@ elif page == "Allocazione Auto":
             st.markdown('<div class="section-header">Cono di Probabilità (Merton Jump-Diffusion)</div>', unsafe_allow_html=True)
             c1, c2, c3 = st.columns(3)
             
-            # NUOVO SELETTORE MODELLO (come richiesto)
             proj_strategy = c1.selectbox("Modello da proiettare", ["Min CVaR", "Markowitz", "Montecarlo Best Sharpe", "GMV Shrinkage", "Equal Weight (Fallback)"])
             anni_futuri = c2.slider("Anni Proiezione", 1, 10, 5)
             n_sim = c3.selectbox("Scenari Paralleli", [1000, 5000])
             
             with st.spinner(f"Calcolo traiettorie stocastiche con Code Grasse per {proj_strategy}..."):
                 
-                # Routing logica dei pesi
                 if proj_strategy == "Min CVaR": w_proj = w_cvar_base
                 elif proj_strategy == "Markowitz": w_proj = w_mk_base
                 elif proj_strategy == "Montecarlo Best Sharpe": w_proj = w_mc_base
@@ -663,10 +676,9 @@ elif page == "Allocazione Auto":
                 giorni = 252 * anni_futuri
                 dt = 1/252
                 
-                # MATEMATICA: Merton Jump-Diffusion Parameters
-                lambda_j = 1.5   # In media 1.5 shock violenti all'anno
-                mu_j = -0.08     # Lo shock medio è un crollo dell'8%
-                sigma_j = 0.05   # Volatilità dello shock
+                lambda_j = 1.5   
+                mu_j = -0.08     
+                sigma_j = 0.05   
                 
                 k = np.exp(mu_j + 0.5 * sigma_j**2) - 1
                 drift = (p_mu - 0.5 * p_vol**2 - lambda_j * k) * dt
@@ -674,15 +686,12 @@ elif page == "Allocazione Auto":
                 sim = np.zeros((giorni+1, n_sim))
                 sim[0] = 100.0
                 
-                # Componente Gaussiana Standard
                 Z = np.random.standard_normal((giorni, n_sim))
                 diffusion = p_vol * np.sqrt(dt) * Z
                 
-                # Componente Poissoniana (Eventi Estremi/Cigni Neri)
                 N = np.random.poisson(lambda_j * dt, (giorni, n_sim))
                 J = N * np.random.normal(mu_j, sigma_j, (giorni, n_sim))
                 
-                # Generazione dei ritorni proiettati
                 sim[1:] = np.exp(drift + diffusion + J)
                 sim = np.cumprod(sim, axis=0)
                 perc = np.percentile(sim, [5, 25, 50, 75, 95], axis=1)
@@ -755,7 +764,6 @@ elif page == "Allocazione a 3":
         
         st.markdown("#### Visualizzazione Allocazioni")
         
-        # PATCH APPLICATA: Ripristino delle 3 colonne come richiesto (affiancati)
         c_pie1, c_pie2, c_pie3 = st.columns(3)
         with c_pie1:
             if r1: st.plotly_chart(pie_chart([manual_asset], [1], "Linea 1"), use_container_width=True)
