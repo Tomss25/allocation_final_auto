@@ -1,7 +1,7 @@
 """
 Unified Quantitative Allocation Platform
 Architettura integrata: Motore Dati Condiviso + Multi-Model Routing
-(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime, MJD, Monkeypatch Signal, Alert Ticker, Allineamento Benchmark e Form Input)
+(Include Patch di Sanitizzazione Dati CSV, Forzatura Datetime, MJD, Monkeypatch Signal, Alert Ticker, Allineamento Benchmark, Form Input e Split KPI Tab 4)
 """
 
 import streamlit as st
@@ -433,7 +433,7 @@ elif page == "Allocazione Auto":
     
     st.markdown(f"**Sorgente:** {st.session_state.data_source} | **Periodo:** {df.index[0].strftime('%d/%m/%Y')} → {df.index[-1].strftime('%d/%m/%Y')} | **Asset:** {len(all_assets)}")
     
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Serie Storiche", "📈 Markowitz", "🎲 Montecarlo", "🛡️ Antifragile", "📉 Backtest", "🔮 Proiezione", "💹 Mercato Live"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Serie Storiche", "📈 Markowitz", "🎲 Montecarlo", "🛡️ Shrinkage | C-VaR", "📉 Backtest", "🔮 Proiezione", "💹 Mercato Live"])
 
     with st.spinner("Preparazione Dati Core..."):
         mu_strat, sigma_strat, meta = prep_data(df, all_assets, lookback, freq_code)
@@ -517,20 +517,29 @@ elif page == "Allocazione Auto":
             with c1: allocation_table(all_assets, w_mc_base)
             with c2: st.plotly_chart(pie_chart(all_assets, w_mc_base, "Montecarlo Best Sharpe"))
 
-        # TAB 4: ANTIFRAGILE
+        # TAB 4: SHRINKAGE | C-VAR
         with tab4:
             st.markdown('<div class="section-header">Min CVaR & Ledoit-Wolf Shrinkage</div>', unsafe_allow_html=True)
             m_cvar = portfolio_metrics(w_cvar_base, mu_strat, sigma_strat, rf)
+            m_gmv = portfolio_metrics(w_gmv_base, mu_strat, sigma_strat, rf)
             
-            st.markdown("#### Minimizzazione Rischio di Rovina (CVaR - 95%)")
-            kpi_row([
-                {"label": "Rendimento Atteso", "value": f"{m_cvar['return']*100:.2f}%"},
-                {"label": "Volatilità Attesa", "value": f"{m_cvar['volatility']*100:.2f}%"},
-                {"label": "Sharpe Ratio", "value": f"{m_cvar['sharpe']:.3f}"}
-            ])
             c1, c2 = st.columns(2)
-            with c1: st.markdown("##### Min-CVaR"); allocation_table(all_assets, w_cvar_base)
-            with c2: st.markdown("##### GMV Shrinkage"); allocation_table(all_assets, w_gmv_base)
+            with c1:
+                st.markdown("##### Min-CVaR (95%)")
+                kpi_row([
+                    {"label": "Rendimento Atteso", "value": f"{m_cvar['return']*100:.2f}%"},
+                    {"label": "Volatilità Attesa", "value": f"{m_cvar['volatility']*100:.2f}%"},
+                    {"label": "Sharpe Ratio", "value": f"{m_cvar['sharpe']:.3f}"}
+                ])
+                allocation_table(all_assets, w_cvar_base)
+            with c2:
+                st.markdown("##### GMV Shrinkage")
+                kpi_row([
+                    {"label": "Rendimento Atteso", "value": f"{m_gmv['return']*100:.2f}%"},
+                    {"label": "Volatilità Attesa", "value": f"{m_gmv['volatility']*100:.2f}%"},
+                    {"label": "Sharpe Ratio", "value": f"{m_gmv['sharpe']:.3f}"}
+                ])
+                allocation_table(all_assets, w_gmv_base)
 
         # TAB 5: BACKTEST
         with tab5:
